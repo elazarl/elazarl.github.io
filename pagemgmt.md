@@ -2,7 +2,7 @@ Have you ever wondered how your memory is being managed?
 
 OSv can provide a nice overview, in readable C++ code. OSv is a very interesting operating system you should definitely check out, it presents modern code, and much less complexity than a real kernel. Yet, it is production ready code.
 
-Let's start at boot time. During boot time,  `mempool.cc` runs `arch_setup_free_memory`. Using `e820` interrupt, the OS asks the BIOS for all valid memory addresses. It would setup the MMU to map all pages, up to 1Gb to their physical counterparts, and mark those pages as free, with `mmu::free_initial_memory_range`. Now OSv can use `new` setting up virtual addresses. The rest of `arch_setup_free_memory` contains custom memory mapping, to aid `malloc` with more efficient allocation. Since it's not related directly to pages allocation - I won't discuss this part.
+Let's start at boot time. During boot time,  `mempool.cc` runs `arch_setup_free_memory`. Using `e820` interrupt, the OS asks the BIOS for all valid memory addresses. It would setup the MMU to map all pages, up to 1Gb to their physical counterparts, and mark those pages as free, with `mmu::free_initial_memory_range`. Now OSv can use `new` to allocate memory. The rest of `arch_setup_free_memory` contains custom memory mapping, to aid `malloc` with more efficient allocation. Since it's not related directly to pages allocation - I won't discuss this part.
 
 What does `free_initial_memory_range` do? Eventually, it adds the free memory range to an intrinsic red-black tree. What does intrinsic means? In regular C++ `set<Foo>`, the data in the red-black tree is external to the tree. There are tree nodes with their pointers, and they contain the `int` data. A typical node looks like
 
@@ -22,7 +22,7 @@ An intrinsic set would have the left and right pointers contains in the `Foo` st
 
 A typical implementation of intrinsic linked list can be found in the [linux kernel](http://isis.poly.edu/kulesh/stuff/src/klist/) [0].
 
-In our case, each free memory range header would contain pointers to the descendants node in the red-black-tree. The initialization code would eventually add a physical free range to the `set`, by initializing the free page object at the beginning of the page, and then adding it to the set, uniting two adjacent ranges if possible
+In our case, each free memory range header would contain pointers to the descendant nodes in the red-black-tree. The initialization code would eventually add a free range to the `set`, by initializing the free page object at the beginning of the page, and then adding it to the set, uniting two adjacent ranges if possible
 
     new (addr) page_range(size);
     free_page_range(static_cast<page_range*>(addr));
@@ -36,7 +36,7 @@ So at the end of the day, after the system boots, we have a red-black-tree that 
 
 Each brown rectangle is a free memory page. The small brown rectangle is the header at the beginning of each page, which points to two other descendant page. Since free ranges are ordered by their physical address, each free range would point to one range in a higher address, and one range at a lower address.
 
-How can we see that in action? Luckily, the OSv folks have put in a `gdb` macro that prints the contents of `free_page_ranges`. Let's run an OSv instance, and break at `memory::setup`:
+How can we see that in action? Luckily, the OSv folks have written a `gdb` macro that prints the contents of `free_page_ranges`. Let's run an OSv instance, and break at `memory::setup`:
 
     $ ./script/run.py -d
     # in a different terminal
@@ -97,7 +97,7 @@ What happens when someone needs a memory page? The simpler path happens before m
         free_page_ranges.erase(begin);
     }
 
-This approach wouldn't scale when multiple CPUs are trying to fetch the `free_page_ranges` list. In order to reduce contention, each CPU maintains its own page_buffer. The page buffer, is a simple stack, of up to 512 free pages owned by a particular CPU. When allocating a page, the CPU would take the topmost free page, when free'ing a page, the CPU would add it to the top. No synchronization is needed, since this data structure is kept per CPU.
+This approach wouldn't scale when multiple CPUs are trying to fetch a free page from the `free_page_ranges` list. In order to reduce contention, each CPU maintains its own `page_buffer`. The page buffer, is a simple stack, of up to 512 free pages owned by a particular CPU. When allocating a page, the CPU would take the topmost free page, when free'ing a page, the CPU would add it to the top. No synchronization is needed, since each CPU has its own page buffer.
 
 Let's see that in action. We'll stop OSv after it's loaded
 
@@ -131,7 +131,7 @@ We can see all the page buffers for all 4 CPUs, which has currently 248, 42, 92 
     CPU 3:
     {static max = 512, nr = 251, free = {0xffffc0003f613000, 0xffffc0003f614000...}}
 
-Note that CPU 0 have given away one free page from his page buffer. Let's free the page
+Note that CPU 0 have given away one free page from its page buffer. Let's free the page
 
     (gdb) p memory::free_page((void*)(0xffffc000247c6000))
     $3 = void
@@ -183,7 +183,7 @@ Now let's allocate another page
     CPU 3:
     {static max = 512, nr = 251, free = {0xffffc0003f613000, 0xffffc0003f614000...}}
 
-Indeed, anohter megabyte of free pages is retrieved from the global free pages list.
+Indeed, another megabyte of free pages is retrieved from the global free pages list.
 
 What happens when the page buffer is full, and the CPU tries to free a page? This page is added to the global `free_page_ranges`.
 
