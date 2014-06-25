@@ -4,7 +4,7 @@ OSv can provide a nice overview, in readable C++ code. OSv is a very interesting
 
 Let's start at boot time. During boot time,  `mempool.cc` runs `arch_setup_free_memory`. Using `e820` interrupt, the OS asks the BIOS for all valid memory addresses. It would setup the MMU to map all pages, up to 1Gb to their physical counterparts, and mark those pages as free, with `mmu::free_initial_memory_range`. Now OSv can use `new` to allocate memory. The rest of `arch_setup_free_memory` contains custom memory mapping, to aid `malloc` with more efficient allocation. Since it's not related directly to pages allocation - I won't discuss this part.
 
-What does `free_initial_memory_range` do? Eventually, it adds the free memory range to an intrinsic red-black tree. What does intrinsic means? In regular C++ `set<Foo>`, the data in the red-black tree is external to the tree. There are tree nodes with their pointers, and they contain the `int` data. A typical node looks like
+What does `free_initial_memory_range` do? Eventually, it adds the free memory range to an _intrusive_ red-black tree. What does intrusive means? In regular C++ `set<Foo>`, the data in the red-black tree is external to the tree. There are tree nodes with their pointers, and they contain the `int` data. A typical node in a red-black tree looks like
 
     struct node {
         node *left, *right;
@@ -12,7 +12,7 @@ What does `free_initial_memory_range` do? Eventually, it adds the free memory ra
         Foo data;
     }
 
-An intrinsic set would have the left and right pointers contains in the `Foo` struct.
+An _intrusive_ set would have the left and right pointers contains in the `Foo` struct.
 
     struct Foo {
         Foo *left, *right;
@@ -20,7 +20,7 @@ An intrinsic set would have the left and right pointers contains in the `Foo` st
         int fooBar, fooBaz;
     }
 
-A typical implementation of intrinsic linked list can be found in the [linux kernel](http://isis.poly.edu/kulesh/stuff/src/klist/) [0].
+A typical implementation of _intrusive_ linked list can be found in the [linux kernel](http://isis.poly.edu/kulesh/stuff/src/klist/).
 
 In our case, each free memory range header would contain pointers to the descendant nodes in the red-black-tree. The initialization code would eventually add a free range to the `set`, by initializing the free page object at the beginning of the page, and then adding it to the set, uniting two adjacent ranges if possible
 
@@ -32,7 +32,7 @@ In our case, each free memory range header would contain pointers to the descend
 
 So at the end of the day, after the system boots, we have a red-black-tree that looks like this:
 
-![Intrinsic Tree Illustration](https://raw.githubusercontent.com/elazarl/elazarl.github.io/master/images/intrinsic_tree.png)
+![Intrusive Tree Illustration](https://raw.githubusercontent.com/elazarl/elazarl.github.io/master/images/intrinsic_tree.png)
 
 Each brown rectangle is a free memory page. The small brown rectangle is the header at the beginning of each page, which points to two other descendant page. Since free ranges are ordered by their physical address, each free range would point to one range in a higher address, and one range at a lower address.
 
@@ -185,8 +185,6 @@ Now let's allocate another page
 
 Indeed, another megabyte of free pages is retrieved from the global free pages list.
 
-What happens when the page buffer is full, and the CPU tries to free a page? This page is added to the global `free_page_ranges`.
+What happens when the page buffer is full, and the CPU tries to free a page? In `unfill_page_buffer`, half of the pages in the page buffer are returned to `free_page_ranges`.
 
 Here you go, no synchronization cost for most page allocations and deallocations, yet, a a simple design.
-
-[0] http://isis.poly.edu/kulesh/stuff/src/klist/
