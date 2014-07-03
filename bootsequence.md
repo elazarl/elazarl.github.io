@@ -60,7 +60,7 @@ it. Let's see that in action.
 
 Let's start the virtual machine, and tell it to stop at load time:
 
-    $ ./scripts/run.py --wait
+    $ ./scripts/run.py -d --wait
 
 On a different terminal, let's connect with gdb, and break at `0x7c00`, the
 address the BIOS loads the MBR to. Note that we're specifying commands that `gdb`
@@ -77,8 +77,7 @@ up, it'll already be loaded, and the correct architecture is set:
     Breakpoint 1, 0x00007c00 in ?? ()
 
 Now we finally started to run OSv code, the Master Boot Record, or the MBR.
-The MBR starts with the `arch/x64/boot16.S` code, which is compiled to
-`build/release/boot.bin`. Let's verify that we indeed see this code:
+The MBR is in `build/debug/boot.bin`. Let's verify that this is the case:
 
     (gdb) x/32b $eip
     0x7c00:	0xea	0x5e	0x7c	0x00	0x00	0x00	0x00	0x00
@@ -94,7 +93,7 @@ The MBR starts with the `arch/x64/boot16.S` code, which is compiled to
 
 Looks like indeed we're running `boot.bin`. How is `boot.bin` generated?
 The answer is in `build.mk`. First `boot16.S` is compiled to `boot16.o`
-with regular compilation, due to the `%.o: %.S` rule. Then, `boot.bin`
+with regular compilation, by the `%.o: %.S` rule. Then, `boot.bin`
 is being linked from `boot16.o` and `boot16.ld` linker script.
 
 What does `boot16.ld` do? At first it defines a memory section of the
@@ -108,6 +107,18 @@ section to the first megabyte of memory we defined previously. That
 way, if `boot16.S` accidently surpass 1MB, the linker would complain.
 
     SECTIONS { .text 0x7c00 : { *(.text) } > BOOTSECT }
+
+For example, if we'll add a megabyte of data at the end of `boot16.S`,
+we'll get the following:
+
+    $ echo .fill 0x10000, 1, 0 >> arch/x64/boot16.S
+    $ make mode=debug
+    ...
+    make[1]: Entering directory `/home/elazar/dev/osv/build/debug'
+      GEN gen/include/osv/version.h
+      AS arch/x64/boot16.o
+      LD boot.bin
+    ld: address 0x17e00 of boot.bin section `.text' is not within region `BOOTSECT'
 
 Finally, we'll instruct `ld` to output the raw assembly instructions,
 without any ELF headers. The BIOS expect the MBR to contain the actual
