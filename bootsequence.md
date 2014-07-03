@@ -5,7 +5,7 @@ write the very first lines of code the CPU would execute
 right after the computer is loaded?
 
 Here, again, OSv is supplying a nice, self contained answer.
-Let's limit our answer to the `x86_64` architecture, also OSv currently
+Let's limit our answer to the `x86_64` architecture, even though OSv
 supports ARM as well.
 
 What happens right after an CPU is loaded? The CPU instruction pointer is
