@@ -22,12 +22,16 @@ Let's see that in action
     $ # on another tab
     $ gdb
     ...
+    (gdb) set architecture i8086 
+    warning: A handler for the OS ABI "GNU/Linux" is not built into this configuration
+    of GDB.  Attempting to continue with the default i8086 settings.
+
+    The target architecture is assumed to be i8086
     (gdb) target remote localhost:1234
     Remote debugging using localhost:1234
     0x0000fff0 in ?? ()
-    (gdb) i r eip
+    (gdb) info registers eip cs
     eip            0xfff0	0xfff0
-    (gdb) i r cs
     cs             0xf000	61440
     (gdb) 
 
@@ -35,7 +39,21 @@ As we start, the CPU start on `0xf000:0xfff0`. To see what the CPU is about to e
 we'll have to translate the segmented address `0xf000:0xfff0` to a
 linear address. Since we start in real mode, we simply have to multiply the segment
 address by `0x10`, and add it to the IP, see [Wikipedia](http://wiki.osdev.org/Segmentation#Real_mode)
-for additional details.
+for additional details. Let's print the first instruction the CPU which should be
+in `0x10*0xf000+0xfff0=0xffff0`:
+
+    (gdb) x/i 0xffff0
+    0xffff0:	ljmp   $0xf000,$0xe05b
+
+It's probably a jump to the BIOS code at `0xf000:0xe05b`. Let's step to the next instruction
+
+    (gdb) si
+    0x0000e05b in ?? ()
+    (gdb) i r eip cs
+    eip            0xe05b	0xe05b
+    cs             0xf000	61440
+
+Indeed, we jumped to `0xf000:0xe05b` as expected.
 
 The BIOS then loads the MBR from the disk at address `0x7c00`, and executes
 it.
