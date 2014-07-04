@@ -126,3 +126,27 @@ assembly commands:
 
     OUTPUT_FORMAT(binary)
 
+What does `boot16.S` do?
+
+At first we can see some x86 bookkeeping. Setting up the
+[A20](http://www.win.tue.nl/~aeb/linux/kbd/A20.html) line, and set up the segment
+registers.
+
+Then, it'll try to actually load the OSV loader from disk, using
+[interrupt 13](http://wiki.osdev.org/ATA_in_x86_RealMode_%28BIOS%29#LBA_in_Extended_Mode)
+
+    int1342_boot_struct:
+    .byte 0x10 # size of packet (16 bytes)
+    .byte 0 # should always be 0
+    .short 0x3f   # fetch 0x3f sectors = 31.5k
+    .short cmdline # fetch to address $cmdline
+    .short 0 # fetch to segment 0
+    .quad 1 # start at LBA 1.
+    # That is, fetch the first 31.5k from the disk
+    ...
+    lea int1342_boot_struct, %si
+    mov $0x42, %ah
+    mov $0x80, %dl
+    int $0x13
+
+Indeed after the interrupt, we can see the system is loaded.
