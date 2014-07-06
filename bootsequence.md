@@ -132,6 +132,7 @@ At first we can see some x86 bookkeeping. Setting up the
 [A20](http://www.win.tue.nl/~aeb/linux/kbd/A20.html) line, and set up the segment
 registers.
 
+# TODO: explain that the cmdline is pushed there.
 Then, it'll try to actually load the OSV loader from disk, using
 [interrupt 13](http://wiki.osdev.org/ATA_in_x86_RealMode_%28BIOS%29#LBA_in_Extended_Mode)
 
@@ -166,5 +167,42 @@ Indeed after the interrupt, we can see something in `cmdline=0x7c00`
     0x7e10:	0x72	0x76	0x65	0x72	0x2e	0x73	0x6f	0x26
     0x7e18:	0x6a	0x61	0x76	0x61	0x2e	0x73	0x6f	0x20
 
-
 Indeed, those bytes appears after the MBR in disk.
+
+Now we have a bit of a problem. On the one hand, we need to be in real mode
+in order to use `int 0x13h` and access the disk with the BIOS. On the other
+hand, we need to be in protected mode in order to access more than the first
+1 MB of memory. What the loader does here, is, it uses the GDT in order to
+switch between protected and real mode. It would switch to real mode, fetch
+a few KB from the disk, move to protected mode, and copy them to memory.
+
+Let's see how the GDT is configured
+
+    gdt:
+    .short gdt_size - 1
+    .short gdt
+    .long 0
+    #             
+    #     base flag limit type  base  limit
+    .quad 0x00 c    f     9b   000000 ffff # 32-bit code segment
+    .quad 0x00 c    f     93   000000 ffff # 32-bit data segment
+    .quad 0x00 0    0     9b   000000 ffff # 16-bit code segment
+    .quad 0x00 0    0     93   000000 ffff # 16-bit data segment
+    ...
+    # set the gdt
+    cli
+    lgdtw gdt
+    mov $0x11, %ax
+    lmsw %ax
+    # move to 32 bit code segment (0x8 = first) - protected mode
+    ljmp $8, $1f
+    ...
+    # move to 16 bit code segment (0x18 = third) - real mode
+    ljmpw $18, $1f
+
+The first GDT entry is the zero descriptor, then
+two 32 bit flat selectors `limit = 0xfffff, base=0x0` whose flag
+have the *size* and *granularity* bits on in `flag`. Next two
+identical flat 16 bit segments, so that we'll be able to jump back
+to real mode. See [GDT](http://wiki.osdev.org/GDT) section in OSDev
+for addition details.
