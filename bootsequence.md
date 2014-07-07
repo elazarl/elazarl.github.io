@@ -77,24 +77,33 @@ up, it'll already be loaded, and the correct architecture is set:
     Breakpoint 1, 0x00007c00 in ?? ()
 
 Now we finally started to run OSv code, the Master Boot Record, or the MBR.
-The MBR is in `build/debug/boot.bin`. Let's verify that this is the case:
+The MBR is in `build/debug/boot.bin`. Let's verify that this is the case.
+In order to do that, let's define a simple alias, that would display files
+in `gdb`'s binary format:
+
+    $ alias gdbdump='hexdump -e '\''"0x%04_ax: " 8/1 "0x%02x\t" "\n"'\'''
+
+Now let's verify that the BIOS is indeed loading `boot.bin`:
 
     (gdb) x/32b $eip
     0x7c00:	0xea	0x5e	0x7c	0x00	0x00	0x00	0x00	0x00
     0x7c08:	0x00	0x00	0x00	0x00	0x00	0x00	0x00	0x00
     0x7c10:	0xdb	0x00	0x10	0x00	0x40	0x00	0x00	0x00
     0x7c18:	0x00	0x80	0x80	0x00	0x00	0x00	0x00	0x00
-    $ hexdump -n 32 -e '"0x%04_ax: " 8/1 "0x%02x\t" "\n" ' \
-    build/release/boot.bin 
-    0x0000: 0xea    0x5e    0x7c    0x00    0x00    0x00    0x00    0x00
-    0x0008: 0x00    0x00    0x00    0x00    0x00    0x00    0x00    0x00
-    0x0010: 0x00    0x10    0x10    0x00    0x40    0x00    0x00    0x00
-    0x0018: 0x00    0x80    0x80    0x00    0x00    0x00    0x00    0x00
+    $ gdbdump -n 32 build/release/boot.bin 
+    0x0000:	0xea    0x5e    0x7c    0x00    0x00    0x00    0x00    0x00
+    0x0008:	0x00    0x00    0x00    0x00    0x00    0x00    0x00    0x00
+    0x0010:	0x00    0x10    0x10    0x00    0x40    0x00    0x00    0x00
+    0x0018:	0x00    0x80    0x80    0x00    0x00    0x00    0x00    0x00
 
-Looks like indeed we're running `boot.bin`. How is `boot.bin` generated?
+Looks like this is the case.
+
+How is `boot.bin` generated?
 The answer is in `build.mk`. First `boot16.S` is compiled to `boot16.o`
 with regular compilation, by the `%.o: %.S` rule. Then, `boot.bin`
-is being linked from `boot16.o` and `boot16.ld` linker script.
+is being linked from `boot16.o` and `boot16.ld` linker script. Later
+we make sure that `boot.bin` would appear in the first 512 bytes of the
+disk image.
 
 What does `boot16.ld` do? At first it defines a memory section of the
 available memory at boot time. The first 1MB.
@@ -132,8 +141,7 @@ At first we can see some x86 bookkeeping. Setting up the
 [A20](http://www.win.tue.nl/~aeb/linux/kbd/A20.html) line, and set up the segment
 registers.
 
-# TODO: explain that the cmdline is pushed there.
-Then, it'll try to actually load the OSV loader from disk, using
+Then, it'll try to load the command line arguments from disk, using
 [interrupt 13](http://wiki.osdev.org/ATA_in_x86_RealMode_%28BIOS%29#LBA_in_Extended_Mode)
 
     int1342_boot_struct:
@@ -167,12 +175,19 @@ Indeed after the interrupt, we can see something in `cmdline=0x7c00`
     0x7e10:	0x72	0x76	0x65	0x72	0x2e	0x73	0x6f	0x26
     0x7e18:	0x6a	0x61	0x76	0x61	0x2e	0x73	0x6f	0x20
 
-Indeed, those bytes appears after the MBR in disk.
+Those bytes are indeed the command line arguments given to OSv
 
-Now we have a bit of a problem. On the one hand, we need to be in real mode
+    $ gdbdump -n 32 build/debug/cmdline
+    0x0000: 0x2f	0x75	0x73	0x72	0x2f	0x6d	0x67	0x6d
+    0x0008: 0x74	0x2f	0x68	0x74	0x74	0x70	0x73	0x65
+    0x0010: 0x72	0x76	0x65	0x72	0x2e	0x73	0x6f	0x26
+    0x0018: 0x6a	0x61	0x76	0x61	0x2e	0x73	0x6f	0x20
+
+Let's move on to load the actual loader.
+We have a problem here. On the one hand, we need to be in real mode
 in order to use `int 0x13h` and access the disk with the BIOS. On the other
 hand, we need to be in protected mode in order to access more than the first
-1 MB of memory. What the loader does, is, it uses the GDT in order to
+1 MB of memory. What `boot16.S` does, is, it uses the GDT in order to
 switch between protected and real mode. It would switch to real mode, fetch
 a few KB from the disk, move to protected mode, and copy them to memory.
 
@@ -251,3 +266,6 @@ Now back in real mode, we make another interrupt, unless we already read
     addl $(0x8000 / 0x200), lba
     decw count32
     jnz read_disk
+
+Finally, the loader would save the memory map to `mb_mmap_addr` with
+[int 15h](http://www.uruk.org/orig-grub/mem64mb.html).
