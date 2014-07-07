@@ -172,7 +172,7 @@ Indeed, those bytes appears after the MBR in disk.
 Now we have a bit of a problem. On the one hand, we need to be in real mode
 in order to use `int 0x13h` and access the disk with the BIOS. On the other
 hand, we need to be in protected mode in order to access more than the first
-1 MB of memory. What the loader does here, is, it uses the GDT in order to
+1 MB of memory. What the loader does, is, it uses the GDT in order to
 switch between protected and real mode. It would switch to real mode, fetch
 a few KB from the disk, move to protected mode, and copy them to memory.
 
@@ -192,13 +192,6 @@ Let's see how the GDT is configured
     # set the gdt
     cli
     lgdtw gdt
-    mov $0x11, %ax
-    lmsw %ax
-    # move to 32 bit code segment (0x8 = first) - protected mode
-    ljmp $8, $1f
-    ...
-    # move to 16 bit code segment (0x18 = third) - real mode
-    ljmpw $18, $1f
 
 The first GDT entry is the zero descriptor, then
 two 32 bit flat selectors `limit = 0xfffff, base=0x0` whose flag
@@ -206,3 +199,55 @@ have the *size* and *granularity* bits on in `flag`. Next two
 identical flat 16 bit segments, so that we'll be able to jump back
 to real mode. See [GDT](http://wiki.osdev.org/GDT) section in OSDev
 for addition details.
+
+Now let's see the snippets that takes us back and forth from protected
+mode to real mode:
+
+    # set protected mode bit in cr0
+    mov $0x11, %ax
+    lmsw %ax
+    # move to 32 bit code segment (0x8 = first) - protected mode
+    # ljmp to flush prefetch queue http://goo.gl/JBOnZ5
+    ljmp $8, $1f
+    ...
+    # move to 16 bit code segment (0x18 = third)
+    # then set real mode in cr0
+    ljmpw $18, $1f
+    1:
+    .code16
+    # clear protected mode bit
+    mov $0x10, %eax
+    mov %eax, %cr0
+    ljmpw $0, $1f
+
+Finally let's see process of moving memory from the disk. First `read_disk`
+is used to read `0x8000` bytes from the disk to `tmp`:
+
+    read_disk:
+    lea int1342_struct, %si
+    mov $0x42, %ah
+    mov $0x80, %dl
+    int $0x13
+
+Then in protected mode we copy them to `xfer`, and increment the value
+there by `0x8000`:
+
+    mov $0x10, %ax
+    mov %eax, %ds
+    mov %eax, %es
+    mov $tmp, %esi
+    mov xfer, %edi
+    mov $0x8000, %ecx
+    rep movsb
+    mov %edi, xfer
+
+Now back in real mode, we make another interrupt, unless we already read
+`count32` bytes.
+
+    xor %ax, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    sti
+    addl $(0x8000 / 0x200), lba
+    decw count32
+    jnz read_disk
