@@ -77,7 +77,24 @@ up, it'll already be loaded, and the correct architecture is set:
     Breakpoint 1, 0x00007c00 in ?? ()
 
 Now we finally started to run OSv code, the Master Boot Record, or the MBR.
-The MBR is in `build/debug/boot.bin`. Let's verify that this is the case.
+
+What's in the MBR? In order to understand that, let's check out what does
+the bare OSv image contains. Looking at `build.mk` we find that the first
+bytes of the image are built by:
+
+    loader.img: boot.bin lzloader.elf
+        # first block, ie, 512 bytes, are simply boot.bin
+        dd if=boot.bin of=$@ > /dev/null 2>&1, DD $@ boot.bin
+        # Then, after 128 blocks of 512 bytes, ie, 64K, the lzloader.elf
+        dd if=lzloader.elf of=$@ conv=notrunc seek=128 > /dev/null 2>&1
+        # set number of blocks boot16.S fetches to lzloader.elf's size
+    	$(src)/scripts/imgedit.py setsize $@ $(image-size), IMGEDIT $@)
+        # write the command line parameters right after the MBR, after 512 bytes
+    	$(src)/scripts/imgedit.py setargs $@ $(cmdline), IMGEDIT $@)
+
+The first 512 bytes, the MBR is actually `build/debug/boot.bin`.
+Let's verify that this is the case.
+
 In order to do that, let's define a simple alias, that would display files
 in `gdb`'s binary format:
 
