@@ -158,7 +158,7 @@ Then, it'll try to load the command line arguments from disk, using
     mov $0x80, %dl
     int $0x13
 
-Indeed after the interrupt, we can see something in `cmdline=0x7c00`
+Indeed after the interrupt, we can see something in `cmdline=0x7e00`
 
     (gdb) hbr *0x7c81
     ...
