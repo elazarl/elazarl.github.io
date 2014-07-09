@@ -56,8 +56,31 @@ It's probably a jump to the BIOS code at `0xf000:0xe05b`. Let's step to the next
 Indeed, we jumped to `0xf000:0xe05b` as expected.
 
 The BIOS then loads the MBR from the disk at address `0x7c00`, and executes
-it. Let's see that in action.
+it.
 
+What's in the MBR? In order to understand that, let's check out what does
+the bare OSv image contains. Looking at `build.mk` we can find the files
+generating the basic OSv image, `loader.img`.
+Here is a simplified `build.mk` snippet that creates it:
+
+    loader.img: boot.bin lzloader.elf
+        # first block, ie, 512 bytes, are simply boot.bin
+        dd if=boot.bin of=$@ > /dev/null 2>&1, DD $@ boot.bin
+        # Then, after 128 blocks of 512 bytes, ie, 64K, the lzloader.elf
+        dd if=lzloader.elf of=$@ conv=notrunc seek=128 > /dev/null 2>&1
+        # set number of blocks boot16.S fetches to lzloader.elf's size
+    	$(src)/scripts/imgedit.py setsize $@ $(image-size), IMGEDIT $@)
+        # write the command line parameters right after the MBR, after 512 bytes
+    	$(src)/scripts/imgedit.py setargs $@ $(cmdline), IMGEDIT $@)
+
+The first 512 bytes, the MBR, is `build/debug/boot.bin`. Then `imgedit.py` inserts
+the command line parameter of the OSv instance. Next we have zeros until after 64K,
+where `lzloader.elf` would appear. In ASCII art sketch:
+
+    0......512.................65536=64k
+    [boot.bin][cmdline]00000000[lzloader.elf]
+
+Let's see MBR loading in action.
 Let's start the virtual machine, and tell it to stop at load time:
 
     $ ./scripts/run.py -d --wait
@@ -78,21 +101,6 @@ up, it'll already be loaded, and the correct architecture is set:
 
 Now we finally started to run OSv code, the Master Boot Record, or the MBR.
 
-What's in the MBR? In order to understand that, let's check out what does
-the bare OSv image contains. Looking at `build.mk` we find that the first
-bytes of the image are built by:
-
-    loader.img: boot.bin lzloader.elf
-        # first block, ie, 512 bytes, are simply boot.bin
-        dd if=boot.bin of=$@ > /dev/null 2>&1, DD $@ boot.bin
-        # Then, after 128 blocks of 512 bytes, ie, 64K, the lzloader.elf
-        dd if=lzloader.elf of=$@ conv=notrunc seek=128 > /dev/null 2>&1
-        # set number of blocks boot16.S fetches to lzloader.elf's size
-    	$(src)/scripts/imgedit.py setsize $@ $(image-size), IMGEDIT $@)
-        # write the command line parameters right after the MBR, after 512 bytes
-    	$(src)/scripts/imgedit.py setargs $@ $(cmdline), IMGEDIT $@)
-
-The first 512 bytes, the MBR is actually `build/debug/boot.bin`.
 Let's verify that this is the case.
 
 In order to do that, let's define a simple alias, that would display files
@@ -116,11 +124,9 @@ Now let's verify that the BIOS is indeed loading `boot.bin`:
 Looks like this is the case.
 
 How is `boot.bin` generated?
-The answer is in `build.mk`. First `boot16.S` is compiled to `boot16.o`
+The answer is, again, in `build.mk`. First `boot16.S` is compiled to `boot16.o`
 with regular compilation, by the `%.o: %.S` rule. Then, `boot.bin`
-is being linked from `boot16.o` and `boot16.ld` linker script. Later
-we make sure that `boot.bin` would appear in the first 512 bytes of the
-disk image.
+is being linked from `boot16.o` and `boot16.ld` linker script.
 
 What does `boot16.ld` do? At first it defines a memory section of the
 available memory at boot time. The first 1MB.
@@ -155,7 +161,7 @@ assembly commands:
 What does `boot16.S` do?
 
 At first we can see some x86 bookkeeping. Setting up the
-[A20](http://www.win.tue.nl/~aeb/linux/kbd/A20.html) line, and set up the segment
+[A20 line](http://www.win.tue.nl/~aeb/linux/kbd/A20.html), and set up the segment
 registers.
 
 Then, it'll try to load the command line arguments from disk, using
@@ -286,3 +292,12 @@ Now back in real mode, we make another interrupt, unless we already read
 
 Finally, the loader would save the memory map to `mb_mmap_addr` with
 [int 15h](http://www.uruk.org/orig-grub/mem64mb.html).
+
+The very last step is, jump into the `lzloader.elf` code.
+We go back to protected mode, jump to a predefined addresses
+that would decompress the loader code, and another call to the
+loader code itself.
+
+From now on, we're salvated from the x86 assembly land, and most
+of the code would be in C++.
+
