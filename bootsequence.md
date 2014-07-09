@@ -1,16 +1,16 @@
 # How does OSv boot?
 
-What happens after the computer power is on? How do you
+What happens after the computer is turned on? How do you
 write the very first lines of code the CPU would execute
-right after the computer is loaded?
+right after the computer starts?
 
 Here, again, OSv is supplying a nice, self contained answer.
 Let's limit our answer to the `x86_64` architecture, even though OSv
 supports ARM as well.
 
-What happens right after an CPU is loaded? The CPU instruction pointer is
+What happens right after an CPU is started? The CPU instruction pointer is
 initialized to its _reset vector_. The x86 CPU sets their `CS:EIP` address
-to the fixed address `0xF000:0xFFF0`, this physical address contains some
+to the fixed address `0xF000:0xFFF0`, this address contains some
 code leading you eventually to the BIOS.
 See [coreboot](http://www.coreboot.org/Coreboot_v3#How_coreboot_starts_after_Reset)'s
 documentation for additional information.
@@ -39,8 +39,8 @@ As we start, the CPU start on `0xf000:0xfff0`. To see what the CPU is about to e
 we'll have to translate the segmented address `0xf000:0xfff0` to a
 linear address. Since we start in real mode, we simply have to multiply the segment
 address by `0x10`, and add it to the IP, see [Wikipedia](http://wiki.osdev.org/Segmentation#Real_mode)
-for additional details. Let's print the first instruction the CPU which should be
-in `0x10*0xf000+0xfff0=0xffff0`:
+for additional details. Let's print the first instruction the CPU which should execute
+at `0x10*0xf000+0xfff0=0xffff0`:
 
     (gdb) x/i 0xffff0
     0xffff0:	ljmp   $0xf000,$0xe05b
@@ -58,10 +58,10 @@ Indeed, we jumped to `0xf000:0xe05b` as expected.
 The BIOS then loads the MBR from the disk at address `0x7c00`, and executes
 it.
 
-What's in the MBR? In order to understand that, let's check out what does
+What's in the MBR? In order to understand that, let's check what does
 the bare OSv image contains. Looking at `build.mk` we can find the files
 generating the basic OSv image, `loader.img`.
-Here is a simplified `build.mk` snippet that creates it:
+Here is a simplified version of the instruction that creates it from `build.mk`:
 
     loader.img: boot.bin lzloader.elf
         # first block, ie, 512 bytes, are simply boot.bin
@@ -74,21 +74,21 @@ Here is a simplified `build.mk` snippet that creates it:
     	$(src)/scripts/imgedit.py setargs $@ $(cmdline), IMGEDIT $@)
 
 The first 512 bytes, the MBR, is `build/debug/boot.bin`. Then `imgedit.py` inserts
-the command line parameter of the OSv instance. Next we have zeros until after 64K,
-where `lzloader.elf` would appear. In ASCII art sketch:
+the command line parameter for OSv. Next we have zeros until the 64Kth byte.
+After that, we put `lzloader.elf`, the loader. In ASCII art sketch:
 
-    0......512.................65536=64k
+    0......512.................65536=64k.....
     [boot.bin][cmdline]00000000[lzloader.elf]
 
-Let's see MBR loading in action.
+Let's see MBR code in action.
 Let's start the virtual machine, and tell it to stop at load time:
 
     $ ./scripts/run.py -d --wait
 
 On a different terminal, let's connect with gdb, and break at `0x7c00`, the
 address the BIOS loads the MBR to. Note that we're specifying commands that `gdb`
-should run at startup with the `-ex` switch, so that when `gdb`'s prompt shows
-up, it'll already be loaded, and the correct architecture is set:
+should run at startup with the `-ex` switch, so that when `gdb` is started,
+it'll connect to QEMU, and the correct architecture is set:
     
     $ gdb -ex 'set architecture i8086' -ex 'target remote localhost:1234'
     ...
@@ -103,7 +103,7 @@ Now we finally started to run OSv code, the Master Boot Record, or the MBR.
 
 Let's verify that this is the case.
 
-In order to do that, let's define a simple alias, that would display files
+Let's define a simple alias, that would display files
 in `gdb`'s binary format:
 
     $ alias gdbdump='hexdump -e '\''"0x%04_ax: " 8/1 "0x%02x\t" "\n"'\'''
@@ -134,8 +134,8 @@ available memory at boot time. The first 1MB.
     MEMORY { BOOTSECT : ORIGIN = 0, LENGTH = 0x10000 }
 
 Then, it'll take all text sections from the input, and relocate them to
-`0x7c00`, where the MBR would load it. It would constraint the text
-section to the first megabyte of memory we defined previously. That
+`0x7c00`, where the MBR would be loaded in to. It would verity that the text
+section fits to the first megabyte of memory we defined previously. That
 way, if `boot16.S` accidently surpass 1MB, the linker would complain.
 
     SECTIONS { .text 0x7c00 : { *(.text) } > BOOTSECT }
@@ -153,15 +153,14 @@ we'll get the following:
     ld: address 0x17e00 of boot.bin section `.text' is not within region `BOOTSECT'
 
 Finally, we'll instruct `ld` to output the raw assembly instructions,
-without any ELF headers. The BIOS expect the MBR to contain the actual
-assembly commands:
+without any ELF headers.
 
     OUTPUT_FORMAT(binary)
 
 What does `boot16.S` do?
 
 At first we can see some x86 bookkeeping. Setting up the
-[A20 line](http://www.win.tue.nl/~aeb/linux/kbd/A20.html), and set up the segment
+[A20 line](http://www.win.tue.nl/~aeb/linux/kbd/A20.html), and the segment
 registers.
 
 Then, it'll try to load the command line arguments from disk, using
@@ -206,15 +205,17 @@ Those bytes are indeed the command line arguments given to OSv
     0x0010: 0x72	0x76	0x65	0x72	0x2e	0x73	0x6f	0x26
     0x0018: 0x6a	0x61	0x76	0x61	0x2e	0x73	0x6f	0x20
 
-Let's move on to load the actual loader.
+Let's move on. Now `boot16.S` would load OSv's loader from disk.
+
 We have a problem here. On the one hand, we need to be in real mode
 in order to use `int 0x13h` and access the disk with the BIOS. On the other
 hand, we need to be in protected mode in order to access more than the first
-1 MB of memory. What `boot16.S` does, is, it uses the GDT in order to
-switch between protected and real mode. It would switch to real mode, fetch
-a few KB from the disk, move to protected mode, and copy them to memory.
+1 MB of memory. What `boot16.S` does, is, switch to real mode, fetch
+a few KB from the disk, move to protected mode, and copy them to memory, back
+to real mode, rinse and repeat.
 
-Let's see how the GDT is configured
+In order to do that, we have to have a GDT that supports both 16-bit and 32-bit
+segments. Let's see how the GDT is configured:
 
     gdt:
     .short gdt_size - 1
@@ -258,7 +259,7 @@ mode to real mode:
     mov %eax, %cr0
     ljmpw $0, $1f
 
-Finally let's see process of moving memory from the disk. First `read_disk`
+Finally let's see the process of moving memory from the disk. First `read_disk`
 is used to read `0x8000` bytes from the disk to `tmp`:
 
     read_disk:
@@ -268,7 +269,7 @@ is used to read `0x8000` bytes from the disk to `tmp`:
     int $0x13
 
 Then in protected mode we copy them to `xfer`, and increment the value
-there by `0x8000`:
+at `xfer` by `0x8000`:
 
     mov $0x10, %ax
     mov %eax, %ds
@@ -279,8 +280,9 @@ there by `0x8000`:
     rep movsb
     mov %edi, xfer
 
-Now back in real mode, we make another interrupt, unless we already read
-`count32` bytes.
+Now back in real mode, we read more from the disk, unless we already read
+`count32` bytes. The `count32` memory location is being set to the loader's
+size by OSv build process.
 
     xor %ax, %ax
     mov %ax, %ds
@@ -291,13 +293,15 @@ Now back in real mode, we make another interrupt, unless we already read
     jnz read_disk
 
 Finally, the loader would save the memory map to `mb_mmap_addr` with
-[int 15h](http://www.uruk.org/orig-grub/mem64mb.html).
+[int 15h e820](http://www.uruk.org/orig-grub/mem64mb.html).
 
 The very last step is, jump into the `lzloader.elf` code.
 We go back to protected mode, jump to a predefined addresses
 that would decompress the loader code, and another call to the
-loader code itself.
+decompressed loader code.
 
 From now on, we're salvated from the x86 assembly land, and most
 of the code would be in C++.
+
+The first part of the journey is done, from reset to the OS loader.
 
