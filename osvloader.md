@@ -101,37 +101,37 @@ Now, we need to [enable 64 bit mode](http://wiki.osdev.org/X86-64#How_do_I_enabl
   1. Disable paging - they were never enabled.
   2. Set the PAE enable bit on CR4
 
-```
-mov $BOOT_CR4, %eax
-mov %eax, %cr4
-```
+    ```
+    mov $BOOT_CR4, %eax
+    mov %eax, %cr4
+    ```
 
   3. Load CR3 with the physical address of [Page Map Level 4](http://www.pagetable.com/?p=14)
 
-```
-lea ident_pt_l4, %eax
-mov %eax, %cr3
-```
+    ```
+    lea ident_pt_l4, %eax
+    mov %eax, %cr3
+    ```
 
   4. Enable long mode by setting the EFER.LME flag in MSR `0xC0000080`
 
-```
-mov $0xc0000080, %ecx
-mov $0x00000900, %eax
-xor %edx, %edx
-wrmsr
-```
+    ```
+    mov $0xc0000080, %ecx
+    mov $0x00000900, %eax
+    xor %edx, %edx
+    wrmsr
+    ```
 
   5. Enable paging, by setting the relevant bit in `CR0`
 
-```
-mov $BOOT_CR0, %eax
-mov %eax, %cr0
-```
+    ```
+    mov $BOOT_CR0, %eax
+    mov %eax, %cr0
+    ```
 
   6. Now the CPU will be in compatibility mode, jump to the special 64-bit GDT code descriptor,
      and we're in 64 bit mode.
 
-```
-ljmpl $8, $start64
-```
+    ```
+    ljmpl $8, $start64
+    ```
