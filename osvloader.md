@@ -162,3 +162,45 @@ Some more bookkeeping to do when in 64 bit mode:
     ```
     call premain
     ```
+
+Now we're in `premain`, and it _looks_ like we're running a regular C++ program.
+There are however a couple of differences:
+
+  1. Global variables are not initialized, since the
+     [`.init` section](http://refspecs.linuxbase.org/LSB_3.1.1/LSB-Core-generic/LSB-Core-generic/specialsections.html)
+     in `loader.elf` yet.
+  2. The stack is limited to `16K`.
+  3. We haven't initialized the other CPUs, so we're running on the
+     [BSP CPU](http://stackoverflow.com/questions/14261612/which-core-initializes-first-when-a-system-boots)
+     that started the system.
+
+What does `premain` do? Code speaks louder than words:
+
+```C++
+arch_init_early_console();
+```
+
+We need to use the newer APIC interrupt controller
+Hence we disable [PIC](http://wiki.osdev.org/8259_PIC)
+
+```C++
+disable_pic();
+auto inittab = elf::get_init(elf_header);
+```
+
+Setup thread local storage.
+
+```
+setup_tls(inittab);
+```
+
+run .init functions from loader.elf allowing us to use
+global variables.
+
+```C++
+for (auto init = inittab.start; init < inittab.start + inittab.count; ++init) {
+    (*init)();
+}
+```
+
+We are now ready to enter `main` and start running the actual loader.
