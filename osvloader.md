@@ -72,7 +72,7 @@ in 32 bit mode before calling `lzloader.elf` and then `loader.elf`, so before we
 bookkeeping to make:
 
 Set GDT to flat segments for 64 and 32 bits, initialize segment registers to this flat segment
-and start using the new GDT.
+and start using the new GDT:
 
 ```
 gdt = . - 8
@@ -84,14 +84,8 @@ gdt = . - 8
     .quad 0x00 c     f    9b    000000  ffff # 32-bit code segment
 gdt_end = .
 lgdt gdt_desc
-mov $0x10, %eax
-mov %eax, %ebp
-mov $0x10, %eax
-mov %eax, %ds
-mov %eax, %es
-mov %eax, %fs
-mov %eax, %gs
-mov %eax, %ss
+// set all segment registers to 0x10, the second segment
+...
 // first, we enable 32-bit mode on the new GDT table
 ljmp $0x18, $1f
 ```
@@ -134,4 +128,37 @@ Now, we need to [enable 64 bit mode](http://wiki.osdev.org/X86-64#How_do_I_enabl
 
     ```
     ljmpl $8, $start64
+    ```
+
+Some more bookkeeping to do when in 64 bit mode:
+
+  1. Zero the BSS section:
+    ```
+    lea .bss, %rdi
+    lea .edata, %rcx
+    sub %rdi, %rcx
+    xor %eax, %eax
+    rep stosb
+    ```
+
+  2. Init global variables with information from `boot16.S`. Note that
+     `boot16.S` keeps the ELF header and multiboot addresses in `%ecx`
+     and `ebx` respectively. `boot.S` saves `%ebx` to `ebp`.
+    ```
+    mov %rbp, elf_header
+    mov %rbx, osv_multiboot_info
+    ```
+
+  3. Set the stack pointer. At first, for `main`, it is simply set
+     to an empty `16K` region in the image, remember that in x64 stack
+     grows down:
+    ```
+    .align 16
+    . = . + 4096*4
+    init_stack_top = .
+    lea init_stack_top, %rsp
+    ```
+  4. Call the `premain` function.
+    ```
+    call premain
     ```
