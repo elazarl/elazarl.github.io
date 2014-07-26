@@ -174,33 +174,36 @@ There are however a couple of differences:
      [BSP CPU](http://stackoverflow.com/questions/14261612/which-core-initializes-first-when-a-system-boots)
      that started the system.
 
-What does `premain` do? Code speaks louder than words:
+What does `premain` do?
 
-```C++
-arch_init_early_console();
-```
+  1. Init terminal
 
-We need to use the newer APIC interrupt controller
-Hence we disable [PIC](http://wiki.osdev.org/8259_PIC)
+    ```C++
+    arch_init_early_console();
+    ```
 
-```C++
-disable_pic();
-auto inittab = elf::get_init(elf_header);
-```
+  2. We need to use the newer APIC interrupt controller
+     Hence we disable [PIC](http://wiki.osdev.org/8259_PIC)
 
-Setup thread local storage.
+    ```C++
+    disable_pic();
+    auto inittab = elf::get_init(elf_header);
+    ```
 
-```
-setup_tls(inittab);
-```
+  3. Setup thread local storage. This is an interesting topic worthy of a discussion alone.
 
-run .init functions from loader.elf allowing us to use
-global variables.
+    ```
+    setup_tls(inittab);
+    ```
 
-```C++
-for (auto init = inittab.start; init < inittab.start + inittab.count; ++init) {
-    (*init)();
-}
-```
+  4. Run .init functions from loader.elf allowing us to use
+     global variables.
+
+    ```C++
+    for (auto init = inittab.start; init < inittab.start + inittab.count; ++init) {
+        (*init)();
+    }
+    ```
 
 We are now ready to enter `main` and start running the actual loader.
+Except of one last thing - initializing SMP.
