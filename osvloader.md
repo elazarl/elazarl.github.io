@@ -205,5 +205,76 @@ What does `premain` do?
     }
     ```
 
-We are now ready to enter `main` and start running the actual loader.
-Except of one last thing - initializing SMP.
+Which functions are running from the `.init` section? And at what order? OSv uses the
+`GCC` `attribute` extension to `C`, that allows you to definte the initialization order.
+All order constants are defined in `include/osv/prio.hh`. Very broadly speaking, we have:
+
+
+```
+console = 101,
+```
+
+That initialize the RS232 console, and allows us to print debug messages.
+
+```
+sort
+```
+
+Sorts the `.fixup` section, for the `safe_load` mechanism.
+
+```
+fpranges
+```
+
+Initialize the free page ranges. See [Memory Pages Handling]()
+
+```
+pt_root
+```
+
+Initialize the machines Page Table.
+
+```
+mempool,
+vma_list,
+reclaimer,
+malloc_pools,
+```
+
+Initialize OSv's memory allocator.
+
+```
+pagecache
+```
+
+??????????????
+
+```
+cpus,
+threadlist,
+pthread,
+notifiers,
+sched,
+```
+
+Initialize OSv's threads and scheduler.
+
+```
+acpi,
+hpet, // High Precision Timer
+idt,
+clock,
+```
+
+Initialize hardware devices like ACPI, and HPEC.
+
+```
+tracepoint_base,
+```
+
+OSv's implementation of tracepoints.
+
+As you remember, the `x64` system starts with one CPU running as the Bootstrap Processor,
+and other CPUs, the Application Processors, are halted. Before waking them up, OSv needs
+to find out how many CPUs are there. This is done using the [ACPICA](https://www.acpica.org/)
+library.
