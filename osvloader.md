@@ -6,7 +6,8 @@ loader. And the actual loader who starts up OSv.
 The first part of the loader of OSv is pretty simple, a C [LZ77 implementation](http://fastlz.org/faq.htm)
 that uncompress the loader. It is compiled to a standard ELF file, and is called by `boot16.S`. The
 `lzloader.ld` linker script specify `uncompress_loader` to be `lzloader.elf`'s entry point, and
-`boot16.S` calls the function at the address of `lzloader.elf start + entry_offset`.
+`boot16.S` calls reads the address of `lzloader.elf start + entry_offset` and calls the funtion at
+that address.
 The function itself is fairly simple:
 
 ```C
@@ -18,7 +19,7 @@ fastlz_decompress(&_binary_loader_stripped_elf_lz_start,
 We decompress the stream at `_binary_loader_stripped_elf_lz_start` to the hardcoded address
 `0x200000`. Obviously, `_binary_loader_stripped_elf_lz_start` contains the compressed loader,
 but where does it come from? The `objcopy` utility comes to the rescue,
-enabling us package a file inside an object file. From the manual:
+enabling us to "copy" a real binary file to a compiled object file. From the manual:
 
 > You can access this binary data inside a program by
 > referencing the special symbols that are created by the conversion
@@ -60,11 +61,11 @@ loader-stripped.elf.lz.o: loader-stripped.elf fastlz/lz
 ```
 
 After lzloader decompress the loader, `boot16.S` calls the ELF file that now appears in `0x200000`
-by calling the address in its entry header. This time, we're running a full fledged C++ program.
+by calling the address in its entry point in the ELF header. This time, we're running a full fledged C++ program.
 
 But wait. One cannot just issue `call main` and expect their C++ program to start.
 Usually the OS sets a proper environment for your `C++` program, loads different sections to different
-location in the virtual memory. Zeros the `BSS` section, sets the `argv` and `argc` command line variables
+location in the virtual memory. Zeros the `BSS` section, sets the `argv` and `argc` command line variables,
 etc. Who does all those things? In OSv _you_ are the OS.
 
 The entry point of `loader.elf` is `start32` in `boot.S`. Let's remember that `boot16.S` left the CPU
@@ -143,7 +144,7 @@ Some more bookkeeping to do when in 64 bit mode:
 
   2. Init global variables with information from `boot16.S`. Note that
      `boot16.S` keeps the ELF header and multiboot addresses in `%ecx`
-     and `ebx` respectively. `boot.S` saves `%ebx` to `ebp`.
+     and `%ebx` respectively. `boot.S` saves `%ebx` to `%ebp`.
     ```
     mov %rbp, elf_header
     mov %rbx, osv_multiboot_info
@@ -168,7 +169,7 @@ There are however a couple of differences:
 
   1. Global variables are not initialized, since the
      [`.init` section](http://refspecs.linuxbase.org/LSB_3.1.1/LSB-Core-generic/LSB-Core-generic/specialsections.html)
-     in `loader.elf` yet.
+     in `loader.elf` didn't run yet.
   2. The stack is limited to `16K`.
   3. We haven't initialized the other CPUs, so we're running on the
      [BSP CPU](http://stackoverflow.com/questions/14261612/which-core-initializes-first-when-a-system-boots)
@@ -190,13 +191,14 @@ What does `premain` do?
     auto inittab = elf::get_init(elf_header);
     ```
 
-  3. Setup thread local storage. This is an interesting topic worthy of a discussion alone.
+  3. Setup thread local storage. This is an interesting topic worthy of a discussion
+     in a separate wiki page.
 
-    ```
+    ```C++
     setup_tls(inittab);
     ```
 
-  4. Run .init functions from loader.elf allowing us to use
+  4. Run .init functions from loader.elf, hence, intializing global variables.
      global variables.
 
     ```C++
@@ -206,8 +208,11 @@ What does `premain` do?
     ```
 
 Which functions are running from the `.init` section? And at what order? OSv uses the
-`GCC` `attribute` extension to `C`, that allows you to definte the initialization order.
-All order constants are defined in `include/osv/prio.hh`. Very broadly speaking, we have:
+`GCC` `attribute` [extension](https://gcc.gnu.org/onlinedocs/gcc-4.9.0/gcc/C_002b_002b-Attributes.html)
+to `C++`, that allows you to definte the initialization order across translation units.
+All order constants are defined in `include/osv/prio.hh`.
+
+Very broadly speaking, we have:
 
 
 ```
@@ -226,13 +231,14 @@ Sorts the `.fixup` section, for the `safe_load` mechanism.
 fpranges
 ```
 
-Initialize the free page ranges. See [Memory Pages Handling]()
+Initialize the free page ranges. See
+[Memory Pages Handling](https://github.com/cloudius-systems/osv/wiki/Managing-Memory-Pages)
 
 ```
 pt_root
 ```
 
-Initialize the machines Page Table.
+Initialize the page table.
 
 ```
 mempool,
@@ -272,7 +278,7 @@ Initialize hardware devices like ACPI, and HPEC, manage interrupts.
 tracepoint_base,
 ```
 
-OSv's implementation of tracepoints.
+OSv's implementation of tracepoints, a mechanism to trace events in the system.
 
 The last phase, is running the loader's `main` function, which takes care of 
 processing `OSv`'s command line argument, and loading the single executable
