@@ -247,7 +247,7 @@ Initialize OSv's memory allocator.
 pagecache
 ```
 
-??????????????
+OSv implementation of swap.
 
 ```
 cpus,
@@ -266,7 +266,7 @@ idt,
 clock,
 ```
 
-Initialize hardware devices like ACPI, and HPEC.
+Initialize hardware devices like ACPI, and HPEC, manage interrupts.
 
 ```
 tracepoint_base,
@@ -274,7 +274,6 @@ tracepoint_base,
 
 OSv's implementation of tracepoints.
 
-As you remember, the `x64` system starts with one CPU running as the Bootstrap Processor,
-and other CPUs, the Application Processors, are halted. Before waking them up, OSv needs
-to find out how many CPUs are there. This is done using the [ACPICA](https://www.acpica.org/)
-library.
+The last phase, is running the loader's `main` function, which takes care of 
+processing `OSv`'s command line argument, and loading the single executable
+you wanted to run.
