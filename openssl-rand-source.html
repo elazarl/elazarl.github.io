@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang=en>
+<head>
+<meta charset=utf-8>
+<title>OpenSSL Randomness Source</title>
+</head>
+<link rel="stylesheet" href="reset.css" />
+<style>
+#article { margin: 0 20% 0 20%; }
+#article { column-width: 300px; column-gap: 20px; column-span: all; }
+#article { margin: 0 20% 0 20%; }
+#main { margin: auto; }
+#p { width: 300px; }
+</style>
+<body>
+<header style="float: left;">
+  <p>TOC</p>
+  <ul>
+    <li><a href="#websearch">Web Search</a></li>
+    <li><a href="#opensslcode">OpenSSL code</a></li>
+    <li><a href="#minimize">Minimize Inspected Code</a></li>
+    <li><a href="#ltrace">ltrace</a></li>
+    <li>
+      <a href="#gdb">gdb</a>
+      <ul>
+      <li><a href="#disassemble">Disassembling with <code>x/i $pc</code></a></li>
+      <li><a href="#adv_i_sym">Using <code>adv</code> and <code>i sy</code></a></li>
+      <li><a href="#catch_syscall">Breaking syscalls with <code>catch syscall</code></a></li>
+      </ul>
+    </li>
+    <li><a href="#summary">Summary</a></li>
+  </ul>
+</header>
+<main>
+  <article>
+  <h1> How does OpenSSL Generates Keys?</h1>
+  <h2>Static analysis</h2>
+  <h3 id="websearch">Web Search</h3>
+  <p>So one wonders what exactly does OpenSSL do to generate a random key.</p>
+  <p>The first thing I did, is a web search, giving answers such as
+    <a href="https://www.caplin.com/developer/caplin-platform/datasource/datasource-seed-the-openssl-random-number-generator">
+      this one
+    </a>
+    which implies that OpenSSL uses internal <dfn>CSPRNG</dfn>, a Cryptographic Secure Pseudorandom Number Generator seeded by
+    the OS CSPRNG, which is seeded from real entropy sources.
+    Specifically, in modern Linux machines, it is seeded by the <a href="https://lwn.net/Articles/590951/">RDSEED</a> instruction,
+    which is a <dfn>TRNG</dfn>, true random number generator.
+  </p>
+  <h3 id="opensslcode">OpenSSL code</h3>
+  <p>When downloading and inspecting the code, one can see <code>RAND_bytes</code> calls <code>RAND_byte_ex</code>
+  when eventually choose, with OpenSSL virtual-table like the current randomness engine and start using it.</p>
+  <figure aria-lablelledby="RAND_byte_ex_impl">
+    <pre>
+int RAND_bytes_ex(OPENSSL_CTX *ctx, unsigned char *buf, int num)
+{
+    const RAND_METHOD *meth = RAND_get_rand_method();
+...
+            return meth->bytes(buf, num);
+...
+        return RAND_DRBG_bytes(drbg, buf, num);
+}
+    </pre>
+    <figcaption id="RAND_byte_ex_impl">How RAND_bytes is implemented</figcaption>
+  </figure>
+  <p>We can search further the code and see that the only production implementation of <code>RAND_METHOD</code>
+  are <code>crypto/engine/eng_rdrand.c</code> and <code>engines/e_padlock.c</code>.</p>
+  <p>This is all fine, but how can we see which engine is actually used in my machine?</p>
+  <p>I might have done a mistake in my static analysis, I might missed some engine, maybe there's a configuration
+  file that affects engine selection. How can I be certain what OpenSSL actually does?</p>
+  <h2>Dynamic Analysis</h2>
+  <h3 id="minimize">Minimize Inspected Code</h3>
+  <p>The first step of dynamic analysis is having a tiny example which I'll use. This is a basic troubleshooting
+  technique, which can be employed simply by hand when filing a bug, or by
+  <a href="https://embed.cs.utah.edu/creduce/">complex tools</a></p>
+  <p>In our case I could either use command line <code>openssl rand 16 -o /dev/null</code>, or write a simple
+  code snippet</p>
+  <figure aria-lablelledby="simple_rand_get">
+    <pre>
+// gcc x.c -lcrypto
+#include &lt;openssl/rand.h&gt;
+
+int main() {
+        unsigned char buf[128];
+        RAND_bytes(buf, sizeof(buf));
+}
+    </pre>
+    <figcaption id="simple_rand_get">Simple RAND_bytes usage</figcaption>
+  </figure>
+  <h3 id="ltrace">ltrace</h3>
+  <p>The first thing we want to see, is which OpenSSL library calls are being used. One
+  simple way to achieve that, is to use <code>ltrace</code>.</p>
+  <figure aria-lablelledby="ltrace_out">
+    <pre>
+❯ ltrace -l libcrypt\* ./a.out
+a.out->RAND_bytes(0x7ffd3619c4a0, 128, 0x7ffd3619c618, 0)                                    = 1
++++ exited (status 0) +++
+    </pre>
+    <figcaption id="ltrace_out">Tracing library calls with ltrace</figcaption>
+  </figure>
+  <p>So, only <code>RAND_bytes</code> is being called. Doesn't help us much with the investigation</p>
+  <h3 id="gdb">gdb</h3>
+  <h4 id="disassemble">Disassembling with <code>x/i $pc</code></h4>
+  <p>Let's figure out what's going on with the <code>gdb</code> debugger.</p>
+  <p>The first thing to do, is to break on <code>RAND_bytes</code> and figure out what's going on.</p>
+  <figure aria-lablelledby="gdb_1">
+    <pre>
+❯ gdb -q ./a.out
+Reading symbols from /home/centos/a.out...done.
+(gdb) br RAND_bytes
+Breakpoint 1 at 0x401030
+(gdb) r
+Starting program: /home/centos/./a.out
+
+Breakpoint 1, 0x00007ffff7a9fca0 in RAND_bytes () from /usr/lib64/libcrypto.so.1.0.2k
+Missing separate debuginfos, use: debuginfo-install openssl-libs-1.0.2k-12.el7.x86_64
+(gdb) x/10i $pc
+=&gt; 0x7ffff7a9fca0 &lt;RAND_bytes&gt;: push   %rbp
+   0x7ffff7a9fca1 &lt;RAND_bytes+1&gt;:       mov    %esi,%ebp
+   0x7ffff7a9fca3 &lt;RAND_bytes+3&gt;:       push   %rbx
+   0x7ffff7a9fca4 &lt;RAND_bytes+4&gt;:       mov    %rdi,%rbx
+   0x7ffff7a9fca7 &lt;RAND_bytes+7&gt;:       sub    $0x8,%rsp
+   0x7ffff7a9fcab &lt;RAND_bytes+11&gt;:      callq  0x7ffff7a9fb20 &lt;RAND_get_rand_method&gt;
+   0x7ffff7a9fcb0 &lt;RAND_bytes+16&gt;:      test   %rax,%rax
+   0x7ffff7a9fcb3 &lt;RAND_bytes+19&gt;:      je     0x7ffff7a9fcd0 &lt;RAND_bytes+48&gt;
+   0x7ffff7a9fcb5 &lt;RAND_bytes+21&gt;:      mov    0x8(%rax),%rax
+   0x7ffff7a9fcb9 &lt;RAND_bytes+25&gt;:      test   %rax,%rax
+(gdb)
+    </pre>
+    <figcaption id="gdb_1">Breaking and inspecting function</figcaption>
+  </figure>
+  <p>Even without reading any Assembly, We can see that <code>RAND_get_rand_method</code>, might be used, 
+  and the function goes on. We are looking for the path of least resistance, is there an easier way to
+  understand the entropy source?</p>
+  <p>Never the less, let's find out which rand_method is used here, just for the sport!</p>
+  <h4 id="adv_i_sym">Using <code>adv</code> and <code>i sy</code></h4>
+  <p>We wish to advance until after the call to <code>RAND_get_rand_method</code>. Gdb can help us with
+  the <code>advance</code> command which would set a breakpoint at a certain address, continue and stop
+  when the instruction pointer gets there. Finally we use <code>info register rax</code> to see the result
+  of <code>RAND_get_rand_method</code>.</p>
+  <figure aria-lablelledby="gdb_2">
+  <pre>
+(gdb) adv *0x7ffff7a9fcb3
+0x00007ffff7a9fcb3 in RAND_bytes () from /usr/lib64/libcrypto.so.1.0.2k
+(gdb) i r rax
+rax            0x7ffff7dcd440   140737351832640
+  </pre>
+    <figcaption id="gdb_2">Advancing to an Address</figcaption>
+  </figure>
+  <p>Huh! We've got it! The method used is <code>0x7ffff7dcd440</code>, but how do we translate that easily
+  from <code>gdb</code>? The answer is <code>info symbol</code>.</p>
+  <figure aria-lablelledby="gdb_3">
+  <pre>
+(gdb) i sy $rax
+rand_ssleay_meth in section .data of /usr/lib64/libcrypto.so.1.0.2k
+  </pre>
+    <figcaption id="gdb_3">Breaking and inspecting function</figcaption>
+  </figure>
+  <p>There, we have it! The exact function called. We can inspect the code in the exact version of the library
+  and figure out what exactly happens, but there's a faster route here:</p>
+  <h4 id="catch_syscall">Breaking syscalls with <code>catch syscall</code></h4>
+  <p>As we saw before, there's a good chance that we're using <code>/dev/urandom</code> for seeding the CSPRNG.
+  Let's find out if that is indeed the case.</p>
+  <p>Our hypothesis is that OpenSSL uses <code>/dev/urandom</code>, and to do that it must issue a syscall.
+  Let's catch this syscall. Note that <code>rdi</code> keeps the first parameter to the syscall.</p>
+  <p>Also, open is a popular syscall, so we would first break at <code>main</code> to avoid catching syscalls
+  to <code>open</code> from the linker and loader</p>
+  <figure aria-lablelledby="gdb_syscall">
+  <pre>
+(gdb) br main
+Breakpoint 1 at 0x40115a
+(gdb) r
+Starting program: /home/centos/./a.out
+
+Breakpoint 1, 0x000000000040115a in main ()
+Missing separate debuginfos, use: debuginfo-install openssl-libs-1.0.2k-12.el7.x86_64
+(gdb) catch syscall open
+Catchpoint 2 (syscall 'open' [2])
+(gdb) command
+Type commands for breakpoint(s) 2, one per line.
+End with a line saying just "end".
+>x/s $rdi
+>end
+(gdb) c
+Continuing.
+
+Catchpoint 2 (call to syscall open), 0x00007ffff7258a10 in __open_nocancel () at ../sysdeps/unix/syscall-template.S:84
+84      ../sysdeps/unix/syscall-template.S: No such file or directory.
+0x7ffff7b5decc: "/dev/urandom"
+  </pre>
+    <figcaption id="gdb_syscall">Catch a syscall</figcaption>
+  </figure>
+  <p>Excellent! We caught a syscall. We used <code>command</code> to automatically print the string,
+  as <code>x/s</code> prints a C string, in the first argument, and indeed we got a call to open
+  <code>urandom</code>.</p>
+  <p>But who called it? A simple <code>backtrace</code> would reveal us:</p>
+  <figure aria-lablelledby="gdb_bt">
+  <pre>
+(gdb) bt
+#0  0x00007ffff7258a10 in __open_nocancel () at ../sysdeps/unix/syscall-template.S:84
+#1  0x00007ffff7aa02b7 in RAND_poll () from /usr/lib64/libcrypto.so.1.0.2k
+#2  0x00007ffff7a9f07d in ssleay_rand_bytes () from /usr/lib64/libcrypto.so.1.0.2k
+#3  0x000000000040116f in main ()
+  </pre>
+    <figcaption id="gdb_bt">Who used random</figcaption>
+  </figure>
+  <p>We have now a pretty good proof, that when using OpenSSL on my machine, we would call
+  <code>RAND_bytes</code> which would find with <code>RAND_get_rand_method</code> the address
+  of <code>ssleay_rand_bytes</code>, jump to it, and to seed the <code>CSPRNG</code> it would
+  open <code>/dev/urandom</code>.</p>
+  <h2 id="summary">Summary</h2>
+  <p>We minimized our test case, used <code>ltrace</code> to find library function calls,
+  used <code>x/i $pc</code> to disassemble current location <code>adv</code> to "move" the
+  instruction pointer to a certain location. Finally <code>catch syscall open</code> and
+  <code>bt</code> showed us who opens <code>/dev/urandom</code>.
+  </article>
+</main>
+
+</body>
+</html>
+
