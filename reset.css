@@ -6,6 +6,8 @@ body{
 	font-family: 'Roboto', sans-serif;
 }
 
+pre { font-family: 'Roboto Mono', monospace; }
+
 div{
 	width: 90%;
 	margin: 10px auto;
