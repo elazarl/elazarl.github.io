@@ -38,7 +38,7 @@ code { background-color: lavender; }
   <h2>Static Analysis</h2>
   <h3 id="websearch">Web Search</h3>
   <p>So one wonders what exactly does OpenSSL do to generate a random key.</p>
-  <p>The first thing I did, is a web search, giving answers such as
+  <p>The first thing I tried, is a web search. This provides answers such as
     <a href="https://www.caplin.com/developer/caplin-platform/datasource/datasource-seed-the-openssl-random-number-generator">
       this one
     </a>
@@ -48,13 +48,18 @@ code { background-color: lavender; }
     which is a <dfn>TRNG</dfn>, true random number generator.
   </p>
   <p>This might be true in general. But is this the case for my particular system, with its configuration and OpenSSL version?
-  I can't be certain</p>
+  I wanted to be certain what is actually used in my system.</p>
   <h3 id="opensslcode">OpenSSL Code</h3>
   <p>In the code, one can see that <code>RAND_bytes</code> calls <code>RAND_byte_ex</code>
-  and then things become less clear. An internal "engine" of OpenSSL is selected to generate random
+  and then things become less clear. An internal "method" of OpenSSL is selected to generate random
   bytes</p>
   <figure aria-lablelledby="RAND_byte_ex_impl">
     <pre>
+int RAND_bytes(unsigned char *buf, int num) {
+...
+    RAND_bytes_ex(...);
+}
+...
 int RAND_bytes_ex(OPENSSL_CTX *ctx, unsigned char *buf, int num)
 {
     const RAND_METHOD *meth = RAND_get_rand_method();
@@ -63,26 +68,21 @@ int RAND_bytes_ex(OPENSSL_CTX *ctx, unsigned char *buf, int num)
 ...
         return RAND_DRBG_bytes(drbg, buf, num);
 }
-...
-int RAND_bytes(unsigned char *buf, int num) {
-...
-    RAND_bytes_ex(...);
-}
     </pre>
     <figcaption id="RAND_byte_ex_impl">How RAND_bytes is implemented</figcaption>
   </figure>
   <p>We can search further in the code and see that the only production implementations of <code>RAND_METHOD</code>
   are <code>crypto/engine/eng_rdrand.c</code> and <code>engines/e_padlock.c</code>.</p>
   <h3>Seeds of Doubt</h3>
-  <p>There seem to be two engines which can be used by RAND_bytes. How can we see which one is actually used in my machine?
+  <p>There seem to be two engines which can be used by RAND_bytes. How can we see which one is actually used on my machine?
   How can I be certain what OpenSSL actually does?</p>
   <h2>Dynamic Analysis</h2>
   <h3 id="minimize">Minimize Inspected Code</h3>
-  <p>The first step of dynamic analysis is having a tiny example which I'll use. This is a basic troubleshooting
+  <p>The first step of dynamic analysis is having a tiny example to run. This is a basic troubleshooting
   technique, which can be employed simply by hand when filing a bug, or by
   <a href="https://embed.cs.utah.edu/creduce/">complex tools</a>.</p>
   <p>In our case I could either use command line <code>openssl rand 16 -o /dev/null</code>, or write a simple
-  code snippet</p>
+  code snippet..</p>
   <figure aria-lablelledby="simple_rand_get">
     <pre>
 // gcc x.c -lcrypto
@@ -110,7 +110,7 @@ a.out->RAND_bytes(0x7ffd3619c4a0, 128, 0x7ffd3619c618, 0)                       
   <h3 id="gdb">gdb</h3>
   <h4 id="disassemble">Disassembling with <code>x/i $pc</code></h4>
   <p>Let's figure out what <code>RAND_bytes</code> do with <code>gdb</code> debugger.</p>
-  <p>We would to break on <code>RAND_bytes</code> and inspect the assembly code in this function</p>
+  <p>We want to break on <code>RAND_bytes</code> and inspect the assembly code in this function:</p>
   <figure aria-lablelledby="gdb_1">
     <pre>
 ❯ gdb -q ./a.out
@@ -156,7 +156,7 @@ rax            0x7ffff7dcd440   140737351832640
   </pre>
     <figcaption id="gdb_2">Advancing to an Address</figcaption>
   </figure>
-  <p>Huh! We've got it! The method used is <code>0x7ffff7dcd440</code>, but how do we translate that easily
+  <p>The method used is in address <code>0x7ffff7dcd440</code>, but how do we translate that easily
   from <code>gdb</code>? The answer is <code>info symbol</code>.</p>
   <figure aria-lablelledby="gdb_3">
   <pre>
@@ -165,8 +165,8 @@ rand_ssleay_meth in section .data of /usr/lib64/libcrypto.so.1.0.2k
   </pre>
     <figcaption id="gdb_3">Breaking and inspecting function</figcaption>
   </figure>
-  <p>There, we have it! The exact function called. We can inspect the code in the exact version of the library
-  and figure out what exactly happens, but there's a faster route here:</p>
+  <p>This is the exact function called. We can inspect the code in the exact version of the library
+  and figure out what exactly happens, but there's a faster route.</p>
   <h4 id="catch_syscall">Breaking syscalls with <code>catch syscall</code></h4>
   <p>As we saw before, there's a good chance that we're using <code>/dev/urandom</code> for seeding the CSPRNG.
   Let's find out if that is indeed the case.</p>
@@ -213,14 +213,13 @@ Catchpoint 2 (call to syscall open), 0x00007ffff7258a10 in __open_nocancel () at
   </pre>
     <figcaption id="gdb_bt">Who used random</figcaption>
   </figure>
-  <p>We have now a pretty good proof, that when using OpenSSL on my machine, we would call
-  <code>RAND_bytes</code> which would find with <code>RAND_get_rand_method</code> the address
-  of <code>ssleay_rand_bytes</code>, jump to it, and to seed the <code>CSPRNG</code> it would
-  open <code>/dev/urandom</code>.</p>
+  <p>We have now a pretty good proof, that when calling <code>RAND_bytes</code> from OpenSSL on my machine,
+  it would call <code>ssleay_rand_bytes</code> that would seed the <code>CSPRNG</code> with random
+  data from <code>/dev/urandom</code>.
   <h2 id="summary">Summary</h2>
   <p>We minimized our test case, used <code>ltrace</code> to find library function calls,
-  used <code>x/i $pc</code> to disassemble current location and <code>adv</code> to "move" the
-  instruction pointer to a certain location. Finally the gdb commands <code>catch syscall open</code> and
+  used <code>x/i $pc</code> to disassemble current location and <code>adv</code> run until
+  a certain instruction. Finally the gdb commands <code>catch syscall open</code> and
   <code>bt</code> showed us who opens <code>/dev/urandom</code>.
   </article>
 </main>
