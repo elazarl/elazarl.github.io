@@ -2,17 +2,11 @@
 <html lang=en>
 <head>
 <meta charset=utf-8>
+<meta name="keywords" content="gdb, openssl, debugging">
+<meta name="author" content="Elazar Leibovich">
 <title>OpenSSL Randomness Source</title>
 </head>
 <link rel="stylesheet" href="reset.css" />
-<style>
-#article { margin: 0 20% 0 20%; }
-#article { column-width: 300px; column-gap: 20px; column-span: all; }
-#article { margin: 0 20% 0 20%; }
-#main { margin: auto; }
-#p { width: 300px; }
-code { background-color: lavender; }
-</style>
 <body>
 <header style="float: left;">
   <p>TOC</p>
@@ -35,6 +29,8 @@ code { background-color: lavender; }
 <main>
   <article>
   <h1> How does OpenSSL Generate Keys?</h1>
+  <h6>Elazar Leibovich <a rel="author" href="mailto:elazarl@gmail.com">📧</a>
+    <a href="http://twitter.com/elazarl" rel="author">🐦</a></h6>
   <h2>Static Analysis</h2>
   <h3 id="websearch">Web Search</h3>
   <p>So one wonders what exactly does OpenSSL do to generate a random key.</p>
@@ -188,8 +184,8 @@ Catchpoint 2 (syscall 'open' [2])
 (gdb) command
 Type commands for breakpoint(s) 2, one per line.
 End with a line saying just "end".
->x/s $rdi
->end
+&gt;x/s $rdi
+&gt;end
 (gdb) c
 Continuing.
 

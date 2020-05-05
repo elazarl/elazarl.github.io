@@ -34,20 +34,8 @@ article {
   margin: 0 auto;
 }
 
-#one p{
-	color: #777;
-	font-size: 16px;
-	font-family: "Roboto", Arial;
-	line-height: 1.25em;
-	padding: 0 0 1em 0;
-	text-align: justify;
-}
+code { background-color: lavender; }
+figcaption { font-family: courier new; font-size: small; color: darkslategrey; }
+a[rel~="author"] { text-decoration: none; }
 
-#two p{
-	color: #333;
-	padding: 0 0 1em 0;
-	font-weight: 400;
-	font-size: 1rem;
-	line-height: 1.8;
-	text-align: justify;
-}
+
