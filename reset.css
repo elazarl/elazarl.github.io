@@ -29,9 +29,14 @@ p{
 	color: #777;
 }
 
+@media only screen and (min-width: 960px) {
 article {
-  max-width: 30em;
+  max-width: 400px;
   margin: 0 auto;
+}
+}
+@media only screen and (max-width: 960px) {
+  header { visibility: hidden; }
 }
 
 code { background-color: lavender; }
