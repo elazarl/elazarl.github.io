@@ -29,13 +29,13 @@ p{
 	color: #777;
 }
 
-@media only screen and (min-width: 960px) {
+@media only screen and (min-device-width: 960px) {
 article {
   max-width: 400px;
   margin: 0 auto;
 }
 }
-@media only screen and (max-width: 960px) {
+@media only screen and (max-device-width: 960px) {
   header { visibility: hidden; }
 }
 
