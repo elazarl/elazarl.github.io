@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang=en>
+<head>
+<meta charset=utf-8>
+<meta name="keywords" content="u-boot, c++, virtualization">
+<meta name="author" content="Elazar Leibovich">
+<title>Running u-boot with C++</title>
+</head>
+<link rel="stylesheet" href="reset.css" />
+<body>
+<header style="float: left;">
+  <p>TOC</p>
+  <ul>
+    <li>
+          <a href="#requirements">Installations</a>
+      <ul>
+      <li><a href="#qemu-inst">QEMU</a></li>
+      <li><a href="#u-boot-inst">u-boot</a></li>
+      </ul>
+
+    </li>
+    <li>
+          <a href="#running">Running u-boot</a>
+      <ul>
+      <li><a href="#command-line">Command Line</a></li>
+      <li><a href="#output">Example Output</a></li>
+      </ul>
+
+    </li>
+    <li><a href="#u-boot">U-boot Modifications For C++</a></li>
+  </ul>
+</header>
+<main>
+  <article>
+  <h1> Running u-boot with C++ Inside</h1>
+  <h6>Elazar Leibovich <a rel="author" href="mailto:elazarl@gmail.com">📧</a></h6>
+  <h2 id="requirements">What You Need to Install</h2>
+  <p>We need three components to run u-boot</p>
+  <ul>
+    <li>Modern enough QEMU</li>
+    <li>u-boot</li>
+    <li>ARM compiler</li>
+  </ul>
+  <p>I'll specify exactly what I used</p>
+  <h3 id="qemu-inst">QEMU</h3>
+  <p>This is QEMU</p>
+  <pre>
+          # note you need qemu dependencies such as
+          #  sudo dnf update && sudo dnf builddep qemu
+          #  sudo apt update && sudo apt build-dep qemu
+          git clone https://github.com/qemu/qemu.git -b v9.2.4
+          cd qemu
+          mkdir build
+          cd build
+          ../configure --target-list=aarch64-softmmu
+          make
+  </pre>
+  <p>Ensure <code>build/qemu-system-aarch64</code> exists</p>
+  <h3 id="u-boot-inst">u-boot</h3>
+  <p>Generally speaking, <code>u-boot</code> has only one requirement, a cross compiler</p>
+  <pre>
+          # sudo dnf install gcc-c++-aarch64-linux-gnu
+          # or
+          # sudo apt install -y g++-aarch64-linux-gnu
+          git clone https://github.com/elazarl/u-boot-plus-plus -b u-boot-plus-plus
+          cd u-boot
+          # configure
+          make CROSS_COMPILE=aarch64-linux-gnu- qemu_arm64_defconfig
+          # build
+          make CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
+  </pre>
+  <h2 id="running">Running everything</h3>
+  <h3 id="command-line">Command Line</h3>
+  <p>Here is an annotated command line to run <code>u-boot</code></p>
+  <pre>
+          qemu-system-aarch64 -machine virt $(# we want a VM matching u-boot configuration) \
+            -nographic $(# no screen is required) \
+            -cpu cortex-a57 $(# choose a reasonable CPU) \
+            -bios ~/u-boot/u-boot.bin $(# The bread and butter, u-boot is the BIOS, closest to boot)
+  </pre>
+  <h3 id="output">Example Output</h3>
+  <p>Note the prompt at the bottom <code>=>x</code>, sorted and with additional <code>x</code> in lowercase.</p>
+  <pre>
+❯ ~/opensource/qemu2/build/qemu-system-aarch64  -machine virt -nographic \
+    -cpu cortex-a57 -bios ~/u-boot/u-boot.bin
+Bloblist at 0 not found (err=-2)
+alloc space exhausted ptr 400 limit 0
+Bloblist at 0 not found (err=-2)
+
+
+U-Boot 2025.10-rc4-00010-gbb890cbd933c (Oct 19 2025 - 09:54:37 +0300)
+
+DRAM:  128 MiB
+using memory 0x4665a000-0x4769a000 for malloc()
+Core:  51 devices, 14 uclasses, devicetree: board
+Flash: 64 MiB
+Loading Environment from Flash... *** Warning - bad CRC, using default environment
+
+In:    serial,usbkbd
+Out:   serial,vidconsole
+Err:   serial,vidconsole
+No USB controllers found
+Net:   eth0: virtio-net#32
+
+Hit any key to stop autoboot: 0
+ =>x
+
+  </pre>
+  <h2 id="u-boot">Our C++ modification</h2>
+  <p>To view our modifications to <code>u-boot</code>, just run <code>git log -p v2025.10-rc4..@</code> </p>
+  <p>I tried to keep every slide in a separate commit so just switch into the relevant one.</p>
+  </article>
+</main>
+
+</body>
+</html>
+
