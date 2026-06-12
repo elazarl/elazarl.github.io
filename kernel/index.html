@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RCU — Read, Copy, Update — interactive explainer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1419; --panel: #161d26; --panel2: #1c2530; --line: #2a3744;
+    --txt: #d7e0ea; --dim: #8294a5; --accent: #4fc3f7; --green: #7ad97a;
+    --orange: #ffb74d; --red: #ef7070; --purple: #b39ddb; --code-bg: #0b0f13;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--txt); }
+  header { padding: 36px 24px 18px; text-align: center;
+           background: linear-gradient(180deg, #101824, var(--bg)); }
+  header h1 { margin: 0 0 6px; font-size: 34px; letter-spacing: .5px; }
+  header h1 span { color: var(--accent); }
+  header p { margin: 0 auto; max-width: 760px; color: var(--dim); }
+  main { max-width: 1060px; margin: 0 auto; padding: 12px 20px 80px; }
+  section { background: var(--panel); border: 1px solid var(--line);
+            border-radius: 14px; padding: 22px 26px; margin: 26px 0; }
+  h2 { margin-top: 0; font-size: 23px; border-bottom: 1px solid var(--line);
+       padding-bottom: 10px; }
+  h2 .tag { font-size: 12px; vertical-align: middle; background: var(--panel2);
+            border: 1px solid var(--line); color: var(--dim); border-radius: 20px;
+            padding: 2px 10px; margin-left: 10px; font-weight: normal; }
+  .cols { display: flex; gap: 22px; flex-wrap: wrap; }
+  .cols > div { flex: 1 1 380px; min-width: 340px; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 10px;
+        padding: 14px 16px; overflow-x: auto; font: 13.5px/1.55 "SF Mono", Menlo,
+        Consolas, monospace; }
+  pre .ln { display: block; padding: 0 6px; border-radius: 5px; white-space: pre; }
+  pre .ln.hl { background: #234; outline: 1px solid var(--accent); }
+  .kw { color: #c792ea; } .fn { color: #82aaff; } .cm { color: #5d7384; }
+  .st { color: #c3e88d; } .nm { color: #f78c6c; }
+  .api-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+              gap: 14px; }
+  .api { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px;
+         padding: 12px 16px; }
+  .api code { color: var(--accent); font-weight: 600; }
+  .api small { color: var(--dim); display: block; margin-top: 4px; }
+  .controls { display: flex; gap: 10px; align-items: center; margin: 14px 0; flex-wrap: wrap; }
+  button { background: var(--panel2); color: var(--txt); border: 1px solid var(--line);
+           border-radius: 8px; padding: 8px 18px; font-size: 15px; cursor: pointer; }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); color: #06222e; border: none; font-weight: 700; }
+  button.primary:hover { filter: brightness(1.1); color: #06222e; }
+  button:disabled { opacity: .35; cursor: default; }
+  .stepinfo { background: var(--panel2); border-left: 4px solid var(--accent);
+              border-radius: 8px; padding: 10px 16px; min-height: 64px; color: var(--txt); }
+  .stepinfo b { color: var(--accent); }
+  svg { width: 100%; height: auto; display: block; }
+  svg text { font: 13px "SF Mono", Menlo, monospace; fill: var(--txt); }
+  svg .lbl { fill: var(--dim); font-size: 11.5px; }
+  svg .box { fill: var(--panel2); stroke: var(--line); stroke-width: 1.5; rx: 9; }
+  svg .arrow { stroke: var(--dim); stroke-width: 2.2; fill: none;
+               marker-end: url(#arr); transition: all .45s; }
+  svg .ghost { opacity: .14; }
+  svg .on { stroke: var(--accent); }
+  .footnote { color: var(--dim); font-size: 13.5px; margin-top: 14px; }
+  .footnote code { color: var(--accent); }
+  a { color: var(--accent); }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; color: var(--dim);
+            font-size: 13px; margin-top: 8px; }
+  .dot { display: inline-block; width: 11px; height: 11px; border-radius: 3px;
+         margin-right: 5px; vertical-align: -1px; }
+  kbd { background: var(--panel2); border: 1px solid var(--line); border-radius: 4px;
+        padding: 0 6px; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>RCU <span>—</span> Read, Copy, Update</h1>
+  <p>An interactive tour of the Linux kernel's read-mostly synchronization mechanism.
+     Readers run lock-free and never block; updaters publish a new copy and defer
+     reclamation until every pre-existing reader is done.
+     Code samples come from <code>Documentation/RCU/whatisRCU.rst</code> in the kernel tree.</p>
+</header>
+
+<main>
+
+<!-- ======================= CORE API ======================= -->
+<section>
+  <h2>The five-piece core API</h2>
+  <div class="api-grid">
+    <div class="api"><code>rcu_read_lock()</code> / <code>rcu_read_unlock()</code>
+      <small>Mark an RCU <b>read-side critical section</b>. Never blocks, never spins —
+      in non-preemptible kernels it compiles to nothing.</small></div>
+    <div class="api"><code>rcu_dereference(p)</code>
+      <small>Fetch an RCU-protected pointer for safe dereferencing <i>inside</i> a read-side
+      critical section. A volatile load plus (on Alpha) a memory barrier.</small></div>
+    <div class="api"><code>rcu_assign_pointer(p, v)</code>
+      <small>Publish a new version: orders all initialization of <code>v</code>
+      <i>before</i> the pointer store, so readers never see a half-built object.</small></div>
+    <div class="api"><code>synchronize_rcu()</code>
+      <small>Block until a <b>grace period</b> elapses: every read-side critical section
+      that started before the call has finished.</small></div>
+    <div class="api"><code>call_rcu(head, func)</code>
+      <small>Non-blocking variant: invoke <code>func(head)</code> after a grace period,
+      from softirq/process context.</small></div>
+  </div>
+</section>
+
+<!-- ======================= READ FLOW ======================= -->
+<section id="read">
+  <h2>Read flow <span class="tag">interactive</span></h2>
+  <p>The reader's entire job: enter the critical section, snapshot the pointer,
+     use it, leave. No writes to shared memory, no waiting.</p>
+  <div class="cols">
+    <div>
+      <pre id="readCode"><span class="ln" data-s="0"><span class="kw">int</span> <span class="fn">foo_get_a</span>(<span class="kw">void</span>)</span><span class="ln" data-s="0">{</span><span class="ln" data-s="0">	<span class="kw">int</span> retval;</span><span class="ln" data-s="0"></span><span class="ln" data-s="1">	<span class="fn">rcu_read_lock</span>();</span><span class="ln" data-s="2,3">	retval = <span class="fn">rcu_dereference</span>(gbl_foo)-&gt;a;</span><span class="ln" data-s="4">	<span class="fn">rcu_read_unlock</span>();</span><span class="ln" data-s="5">	<span class="kw">return</span> retval;</span><span class="ln" data-s="0">}</span></pre>
+    </div>
+    <div>
+      <svg viewBox="0 0 460 250" id="readSvg">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+                  markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="#8294a5"/>
+          </marker>
+          <marker id="arrOn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+                  markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="#4fc3f7"/>
+          </marker>
+        </defs>
+        <rect class="box" id="rdReader" x="20" y="95" width="120" height="58" rx="9"/>
+        <text x="80" y="120" text-anchor="middle">reader</text>
+        <text class="lbl" id="rdState" x="80" y="139" text-anchor="middle">idle</text>
+
+        <rect class="box" x="200" y="20" width="120" height="46" rx="9"/>
+        <text x="260" y="42" text-anchor="middle">gbl_foo</text>
+        <text class="lbl" x="260" y="58" text-anchor="middle">__rcu pointer</text>
+
+        <rect class="box" id="rdFoo" x="330" y="150" width="115" height="76" rx="9"/>
+        <text x="387" y="174" text-anchor="middle">struct foo A</text>
+        <text class="lbl" id="rdA" x="387" y="195" text-anchor="middle">.a = 1</text>
+        <text class="lbl" x="387" y="212" text-anchor="middle">.b  .c</text>
+
+        <path class="arrow" d="M320 55 C 370 70, 387 100, 387 148"/>
+        <path class="arrow ghost" id="rdDeref" d="M142 110 C 170 95, 180 70, 198 52"/>
+        <path class="arrow ghost" id="rdUse" d="M142 130 C 220 150, 260 170, 328 186"/>
+        <rect id="rdSection" x="12" y="86" width="136" height="76" rx="12" fill="none"
+              stroke="#7ad97a" stroke-width="2" stroke-dasharray="6 5" opacity="0"/>
+        <text class="lbl" id="rdSectionLbl" x="80" y="80" text-anchor="middle"
+              fill="#7ad97a" opacity="0">read-side critical section</text>
+      </svg>
+      <div class="legend">
+        <span><span class="dot" style="background:#7ad97a"></span>critical section</span>
+        <span><span class="dot" style="background:#4fc3f7"></span>active access</span>
+      </div>
+    </div>
+  </div>
+  <div class="controls">
+    <button class="primary" onclick="rd.next()">Next ▸</button>
+    <button onclick="rd.prev()">◂ Back</button>
+    <button onclick="rd.reset()">Reset</button>
+    <span class="lbl" id="readPos" style="color:var(--dim)"></span>
+  </div>
+  <div class="stepinfo" id="readInfo"></div>
+</section>
+
+<!-- ======================= UPDATE FLOW ======================= -->
+<section id="upd">
+  <h2>Update flow — Read, Copy, Update <span class="tag">interactive</span></h2>
+  <p>The updater never modifies data in place while readers may be looking at it.
+     It copies, modifies the copy, atomically publishes it, then waits a grace period
+     before freeing the old version.</p>
+  <div class="cols">
+    <div>
+      <pre id="updCode"><span class="ln" data-s="0"><span class="kw">void</span> <span class="fn">foo_update_a</span>(<span class="kw">int</span> new_a)</span><span class="ln" data-s="0">{</span><span class="ln" data-s="0">	<span class="kw">struct</span> foo *new_fp, *old_fp;</span><span class="ln" data-s="0"></span><span class="ln" data-s="1">	new_fp = <span class="fn">kmalloc</span>(<span class="kw">sizeof</span>(*new_fp), GFP_KERNEL);</span><span class="ln" data-s="2">	<span class="fn">spin_lock</span>(&amp;foo_mutex);</span><span class="ln" data-s="3">	old_fp = <span class="fn">rcu_dereference_protected</span>(gbl_foo,</span><span class="ln" data-s="3">			<span class="fn">lockdep_is_held</span>(&amp;foo_mutex));</span><span class="ln" data-s="4">	*new_fp = *old_fp;</span><span class="ln" data-s="4">	new_fp-&gt;a = new_a;</span><span class="ln" data-s="5">	<span class="fn">rcu_assign_pointer</span>(gbl_foo, new_fp);</span><span class="ln" data-s="6">	<span class="fn">spin_unlock</span>(&amp;foo_mutex);</span><span class="ln" data-s="7">	<span class="fn">synchronize_rcu</span>();</span><span class="ln" data-s="8">	<span class="fn">kfree</span>(old_fp);</span><span class="ln" data-s="0">}</span></pre>
+      <p class="footnote">Can't block? Replace the last two lines with
+        <code>call_rcu(&amp;old_fp-&gt;rcu, foo_reclaim)</code> — same grace-period guarantee,
+        reclamation runs as a callback.</p>
+    </div>
+    <div>
+      <svg viewBox="0 0 470 330" id="updSvg">
+        <rect class="box" x="175" y="14" width="120" height="46" rx="9"/>
+        <text x="235" y="36" text-anchor="middle">gbl_foo</text>
+        <text class="lbl" x="235" y="52" text-anchor="middle">__rcu pointer</text>
+
+        <rect class="box" id="upA" x="20" y="120" width="190" height="76" rx="9"/>
+        <text id="upAt" x="115" y="144" text-anchor="middle">struct foo A</text>
+        <text class="lbl" id="upAa" x="115" y="165" text-anchor="middle">.a = 1</text>
+        <text class="lbl" id="upAl" x="115" y="184" text-anchor="middle">(current)</text>
+
+        <g id="upBg" opacity="0">
+          <rect class="box" id="upB" x="310" y="120" width="120" height="76" rx="9"/>
+          <text x="370" y="144" text-anchor="middle">struct foo B</text>
+          <text class="lbl" id="upBa" x="370" y="165" text-anchor="middle">(uninitialized)</text>
+          <text class="lbl" id="upBl" x="370" y="184" text-anchor="middle">(private copy)</text>
+        </g>
+
+        <path class="arrow" id="upPtrA" d="M205 62 C 165 85, 130 95, 115 118"/>
+        <path class="arrow ghost" id="upPtrB" d="M265 62 C 310 85, 350 95, 368 118"/>
+
+        <g id="upR1">
+          <rect class="box" x="10" y="244" width="150" height="50" rx="9"
+                stroke="#7ad97a"/>
+          <text x="85" y="266" text-anchor="middle">reader R1</text>
+          <text class="lbl" id="upR1s" x="85" y="284" text-anchor="middle">in section, sees A</text>
+          <path class="arrow on" id="upR1a" d="M85 242 C 90 225, 100 215, 106 198"
+                marker-end="url(#arrOn)"/>
+        </g>
+        <g id="upR2" opacity="0">
+          <rect class="box" x="310" y="244" width="150" height="50" rx="9"
+                stroke="#7ad97a"/>
+          <text x="385" y="266" text-anchor="middle">reader R2</text>
+          <text class="lbl" x="385" y="284" text-anchor="middle">new reader, sees B</text>
+          <path class="arrow on" d="M385 242 C 382 225, 378 215, 374 198"
+                marker-end="url(#arrOn)"/>
+        </g>
+        <text class="lbl" id="upGP" x="235" y="320" text-anchor="middle" opacity="0"
+              fill="#ffb74d">⏳ grace period: waiting for R1 to exit its section…</text>
+      </svg>
+      <div class="legend">
+        <span><span class="dot" style="background:#7ad97a"></span>readers (never blocked)</span>
+        <span><span class="dot" style="background:#ffb74d"></span>grace period</span>
+        <span><span class="dot" style="background:#ef7070"></span>reclaimed</span>
+      </div>
+    </div>
+  </div>
+  <div class="controls">
+    <button class="primary" onclick="up.next()">Next ▸</button>
+    <button onclick="up.prev()">◂ Back</button>
+    <button onclick="up.reset()">Reset</button>
+    <span class="lbl" id="updPos" style="color:var(--dim)"></span>
+  </div>
+  <div class="stepinfo" id="updInfo"></div>
+</section>
+
+<!-- ======================= TWO READERS TIMELINE ======================= -->
+<section id="two">
+  <h2>One updater, two readers <span class="tag">interactive</span></h2>
+  <p>The whole story on one timeline. Reader <b>R1</b> enters its critical section
+     <i>before</i> the update begins — it may hold a pointer to the old version, so the
+     grace period must wait for it. Reader <b>R2</b> enters <i>after</i> the update began —
+     it can only ever see the new version, so it is never waited for.</p>
+  <div class="cols">
+    <div>
+      <pre id="twoCode"><span class="ln" data-s="1">R1: <span class="fn">rcu_read_lock</span>();</span><span class="ln" data-s="1">R1: p1 = <span class="fn">rcu_dereference</span>(gbl_foo); <span class="cm">/* → A */</span></span><span class="ln" data-s="2">U:  new = <span class="fn">kmalloc</span>(…); *new = *old;</span><span class="ln" data-s="2">U:  new-&gt;a = 42;</span><span class="ln" data-s="3">U:  <span class="fn">rcu_assign_pointer</span>(gbl_foo, new); <span class="cm">/* → B */</span></span><span class="ln" data-s="4">U:  <span class="fn">synchronize_rcu</span>();  <span class="cm">/* GP starts… */</span></span><span class="ln" data-s="5">R2: <span class="fn">rcu_read_lock</span>();</span><span class="ln" data-s="5">R2: p2 = <span class="fn">rcu_dereference</span>(gbl_foo); <span class="cm">/* → B */</span></span><span class="ln" data-s="6">R1: <span class="fn">rcu_read_unlock</span>(); <span class="cm">/* …GP can end */</span></span><span class="ln" data-s="7">U:  <span class="fn">kfree</span>(old);         <span class="cm">/* A reclaimed */</span></span><span class="ln" data-s="8">R2: <span class="fn">rcu_read_unlock</span>();</span></pre>
+    </div>
+    <div>
+      <svg viewBox="0 0 510 240" id="twoSvg">
+        <line x1="50" y1="55"  x2="460" y2="55"  stroke="#2a3744"/>
+        <line x1="50" y1="115" x2="460" y2="115" stroke="#2a3744"/>
+        <line x1="50" y1="175" x2="460" y2="175" stroke="#2a3744"/>
+        <text class="lbl" x="8" y="59">R1</text>
+        <text class="lbl" x="8" y="119">upd</text>
+        <text class="lbl" x="8" y="179">R2</text>
+
+        <rect id="twR1bar" x="100" y="44" height="22" width="0" rx="6"
+              fill="#7ad97a" opacity=".85"/>
+        <rect id="twPrep"  x="150" y="104" height="22" width="0" rx="6"
+              fill="#b39ddb" opacity=".85"/>
+        <rect id="twGP"    x="250" y="104" height="22" width="0" rx="6"
+              fill="#ffb74d" opacity=".9"/>
+        <rect id="twR2bar" x="300" y="164" height="22" width="0" rx="6"
+              fill="#7ad97a" opacity=".85"/>
+
+        <path id="twPub" d="M192 115 l8 -10 l8 10 l-8 10 z" fill="#4fc3f7" opacity="0"/>
+        <text id="twPubLbl" class="lbl" x="200" y="98" text-anchor="middle"
+              fill="#4fc3f7" opacity="0">publish B</text>
+        <text id="twFree" x="400" y="120" text-anchor="middle" fill="#ef7070"
+              opacity="0">kfree(A)</text>
+
+        <text id="twR1lbl" class="lbl" x="100" y="38" opacity="0">sees A — pre-existing, GP waits for it</text>
+        <text id="twR2lbl" class="lbl" x="300" y="218" opacity="0">sees B — never waited for</text>
+        <text id="twGPlbl" class="lbl" x="285" y="138" fill="#ffb74d" opacity="0">grace period</text>
+
+        <line id="twNow" x1="100" y1="20" x2="100" y2="200" stroke="#4fc3f7"
+              stroke-dasharray="4 4" opacity="0"/>
+        <text id="twPtr" x="460" y="20" text-anchor="end" fill="#4fc3f7">gbl_foo → A</text>
+        <text id="twA" x="460" y="38" text-anchor="end" class="lbl">A: live</text>
+      </svg>
+      <div class="legend">
+        <span><span class="dot" style="background:#7ad97a"></span>read-side critical section</span>
+        <span><span class="dot" style="background:#b39ddb"></span>copy + update</span>
+        <span><span class="dot" style="background:#ffb74d"></span>grace period</span>
+        <span><span class="dot" style="background:#4fc3f7"></span>publication</span>
+      </div>
+    </div>
+  </div>
+  <div class="controls">
+    <button class="primary" onclick="tw.next()">Next ▸</button>
+    <button onclick="tw.prev()">◂ Back</button>
+    <button onclick="tw.reset()">Reset</button>
+    <span class="lbl" id="twoPos" style="color:var(--dim)"></span>
+  </div>
+  <div class="stepinfo" id="twoInfo"></div>
+</section>
+
+<!-- ======================= DEREFERENCE VARIANTS ======================= -->
+<section id="deref">
+  <h2>rcu_dereference() vs rcu_dereference_protected()</h2>
+  <p>Both fetch an RCU-protected pointer — the difference is <b>what protects you</b>
+     while you use the result, and they encode that difference so tooling can verify it.</p>
+  <div class="cols">
+    <div>
+      <h3 style="color:var(--green); margin-bottom:6px">rcu_dereference(p) — reader side</h3>
+      <p>For code inside <code>rcu_read_lock()</code>…<code>rcu_read_unlock()</code>.
+         The pointer <i>can change at any moment</i> — an updater may publish a new
+         version concurrently — so the macro:</p>
+      <ul>
+        <li>does a <b>volatile load</b>, forbidding the compiler from reloading,
+            speculating, or tearing it (and adds the barrier DEC Alpha needs);</li>
+        <li>pairs with the write barrier in <code>rcu_assign_pointer()</code>, so if you
+            see the new pointer you also see its fully-initialized contents;</li>
+        <li>with <code>CONFIG_PROVE_RCU</code>, makes <b>lockdep complain</b> if called
+            outside a read-side critical section.</li>
+      </ul>
+      <p>The snapshot is valid <b>only inside the enclosing section</b>. From the doc —
+         this is a bug:</p>
+<pre><span class="fn">rcu_read_lock</span>();
+p = <span class="fn">rcu_dereference</span>(head.next);
+<span class="fn">rcu_read_unlock</span>();
+x = p-&gt;address;	<span class="cm">/* BUG!!! section over, p may be freed */</span>
+<span class="fn">rcu_read_lock</span>();
+y = p-&gt;data;	<span class="cm">/* BUG!!! a new section doesn't revive p */</span>
+<span class="fn">rcu_read_unlock</span>();</pre>
+    </div>
+    <div>
+      <h3 style="color:var(--orange); margin-bottom:6px">rcu_dereference_protected(p, c) — update side</h3>
+      <p>For code that <b>already holds the lock which serializes updates</b> to this
+         pointer. While you hold it, no other updater can swing the pointer — so:</p>
+      <ul>
+        <li><b>no <code>rcu_read_lock()</code> needed</b> and no read barriers — the
+            compiler is even allowed to optimize accesses, which
+            <code>rcu_dereference()</code> must forbid;</li>
+        <li>the second argument is a <b>lockdep expression</b> naming the protection.
+            It is executable documentation: if the condition doesn't hold at runtime,
+            lockdep emits a splat;</li>
+        <li>it says to the next reader of the code: "this pointer can't change under
+            me, and <i>here is why</i>".</li>
+      </ul>
+<pre>old_fp = <span class="fn">rcu_dereference_protected</span>(gbl_foo,
+		<span class="fn">lockdep_is_held</span>(&amp;foo_mutex));</pre>
+      <p class="footnote">Rule of thumb: reading concurrently → <code>rcu_dereference()</code>
+         inside a section. Updating under the update lock →
+         <code>rcu_dereference_protected()</code> with the matching
+         <code>lockdep_is_held()</code>. (In this tree:
+         <code>net/core/gen_estimator.c</code> uses
+         <code>rcu_dereference_protected(*rate_est, 1)</code> while holding the qdisc
+         lock — the constant <code>1</code> says "trust me", used where the protecting
+         lock is the caller's and can't be named in a lockdep expression.)</p>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= WHY THE MUTEX ======================= -->
+<section id="mutex">
+  <h2>Why foo_mutex? Who holds it? <span class="tag">interactive</span></h2>
+  <p>RCU protects <b>readers from updaters</b> — it does <i>nothing</i> to protect
+     <b>updaters from each other</b>. <code>rcu_assign_pointer()</code> is just a
+     store with a barrier; two concurrent updaters doing read-copy-update on the same
+     pointer will race. The mutex serializes them. <b>Only updaters take it — readers
+     never touch it</b>, which is exactly why reads keep scaling.</p>
+  <div class="controls">
+    <button class="primary" id="raceBtn" onclick="toggleRace()">Show the race (no mutex)</button>
+  </div>
+  <div class="cols">
+    <div>
+      <h3 id="raceTitleL" style="color:var(--green); margin-bottom:6px">With foo_mutex (correct)</h3>
+      <ol id="raceGood" style="line-height:1.9">
+        <li>U1: <code>spin_lock(&amp;foo_mutex)</code></li>
+        <li>U1: reads <code>gbl_foo</code> → A, copies to B, sets <code>.a = 42</code></li>
+        <li>U1: <code>rcu_assign_pointer(gbl_foo, B)</code>, unlock, GP, <code>kfree(A)</code></li>
+        <li>U2: <code>spin_lock(&amp;foo_mutex)</code> <i>(was blocked until now)</i></li>
+        <li>U2: reads <code>gbl_foo</code> → <b>B</b>, copies to C, sets <code>.b = 'x'</code></li>
+        <li>U2: publishes C, unlock, GP, <code>kfree(B)</code></li>
+      </ol>
+      <p class="footnote" id="raceNoteL">Final version C has <b>both</b> updates
+         (<code>.a = 42</code> and <code>.b = 'x'</code>); every version freed exactly once.</p>
+    </div>
+    <div id="raceBadCol" style="opacity:.25; transition: opacity .4s">
+      <h3 style="color:var(--red); margin-bottom:6px">Without the mutex (broken)</h3>
+      <ol style="line-height:1.9">
+        <li>U1: reads <code>gbl_foo</code> → A, copies to B, sets <code>.a = 42</code></li>
+        <li>U2: reads <code>gbl_foo</code> → <b>A too</b>, copies to C, sets <code>.b = 'x'</code></li>
+        <li>U1: <code>rcu_assign_pointer(gbl_foo, B)</code></li>
+        <li>U2: <code>rcu_assign_pointer(gbl_foo, C)</code>
+            — <span style="color:var(--red)">U1's <code>.a = 42</code> is silently lost</span>
+            (C was copied from A, not B)</li>
+        <li>U1: <code>synchronize_rcu(); kfree(A)</code></li>
+        <li>U2: <code>synchronize_rcu(); kfree(A)</code>
+            — <span style="color:var(--red)"><b>double free of A</b></span>, and B leaks</li>
+      </ol>
+      <p class="footnote">Two classic corruption bugs from one missing lock: a lost
+         update and a double-free. Nothing about RCU prevents this — serializing
+         updaters is explicitly the caller's job ("Use some solid design, such as locks,
+         to keep concurrent updates from interfering with each other").</p>
+    </div>
+  </div>
+  <p class="footnote">Who holds what, at a glance:
+     <b>readers</b> hold only <code>rcu_read_lock()</code> (free, never blocks);
+     <b>updaters</b> hold <code>foo_mutex</code> across
+     <i>read pointer → copy → modify → <code>rcu_assign_pointer()</code></i>, and may drop
+     it before <code>synchronize_rcu()</code> — the grace-period wait needs no lock, and
+     holding a mutex across it just lengthens the critical section. In
+     <code>net/core/gen_estimator.c</code> below, the qdisc spinlock plays the role of
+     <code>foo_mutex</code>: estimator create/replace runs under it, while the
+     <code>gen_estimator_read()</code> fast path never takes it.</p>
+</section>
+
+<!-- ======================= GRACE PERIOD ======================= -->
+<section id="gp">
+  <h2>What exactly does a grace period wait for? <span class="tag">animation</span></h2>
+  <p><code>synchronize_rcu()</code> waits only for read-side critical sections that are
+     <b>already running</b> when it is called — not ones that begin afterwards.
+     Straight from the document:</p>
+  <pre>	CPU 0                  CPU 1                 CPU 2
+	----------------- ------------------------- ---------------
+	1.  rcu_read_lock()
+	2.                    enters synchronize_rcu()
+	3.                                               rcu_read_lock()
+	4.  rcu_read_unlock()
+	5.                     exits synchronize_rcu()
+	6.                                              rcu_read_unlock()</pre>
+  <svg viewBox="0 0 700 190" id="gpSvg">
+    <line x1="90" y1="40" x2="660" y2="40" stroke="#2a3744"/>
+    <line x1="90" y1="90" x2="660" y2="90" stroke="#2a3744"/>
+    <line x1="90" y1="140" x2="660" y2="140" stroke="#2a3744"/>
+    <text x="14" y="45" class="lbl">CPU 0</text>
+    <text x="14" y="95" class="lbl">CPU 1</text>
+    <text x="14" y="145" class="lbl">CPU 2</text>
+    <rect id="gpR0" x="120" y="28" width="0" height="24" rx="6" fill="#7ad97a" opacity=".85"/>
+    <rect id="gpS1" x="210" y="78" width="0" height="24" rx="6" fill="#ffb74d" opacity=".9"/>
+    <rect id="gpR2" x="300" y="128" width="0" height="24" rx="6" fill="#7ad97a" opacity=".85"/>
+    <text id="gpT0" class="lbl" x="120" y="22" opacity="0">rcu_read_lock()</text>
+    <text id="gpT1" class="lbl" x="210" y="72" opacity="0">synchronize_rcu()</text>
+    <text id="gpT2" class="lbl" x="300" y="122" opacity="0">rcu_read_lock() — started after, NOT waited for</text>
+    <text id="gpDone" x="350" y="178" text-anchor="middle" opacity="0" fill="#7ad97a">
+      synchronize_rcu() returns the moment CPU 0 leaves its section — CPU 2 may still be reading.</text>
+  </svg>
+  <div class="controls">
+    <button class="primary" id="gpPlay" onclick="gpPlay()">▶ Play</button>
+  </div>
+</section>
+
+<!-- ======================= IN THE WILD ======================= -->
+<section>
+  <h2>The same pattern in real kernel code</h2>
+  <p>A small, self-contained example: the network packet-rate estimator,
+     <code>net/core/gen_estimator.c</code> (~280 lines). Every qdisc can have a
+     <code>struct net_rate_estimator __rcu *</code> attached. The fast path reads it
+     constantly; reconfiguration swaps it. It is the <code>foo_get_a()</code> /
+     <code>foo_update_a()</code> pattern, verbatim:</p>
+  <div class="cols">
+    <div>
+<pre><span class="cm">/* reader — gen_estimator_read() */</span>
+<span class="fn">rcu_read_lock</span>();
+est = <span class="fn">rcu_dereference</span>(*rate_est);
+<span class="kw">if</span> (!est) {
+	<span class="fn">rcu_read_unlock</span>();
+	<span class="kw">return</span> <span class="nm">false</span>;
+}
+
+<span class="kw">do</span> {
+	seq = <span class="fn">read_seqcount_begin</span>(&amp;est-&gt;seq);
+	sample-&gt;bps = est-&gt;avbps &gt;&gt; 8;
+	sample-&gt;pps = est-&gt;avpps &gt;&gt; 8;
+} <span class="kw">while</span> (<span class="fn">read_seqcount_retry</span>(&amp;est-&gt;seq, seq));
+
+<span class="fn">rcu_read_unlock</span>();
+<span class="kw">return</span> <span class="nm">true</span>;</pre>
+      <p class="footnote">RCU guarantees <code>est</code> stays <i>allocated</i>; the
+         inner seqcount loop handles the orthogonal problem of reading two fields
+         consistently while the estimator timer updates them.</p>
+    </div>
+    <div>
+<pre><span class="cm">/* updater — gen_new_estimator() */</span>
+<span class="kw">if</span> (lock)
+	<span class="fn">spin_lock_bh</span>(lock);   <span class="cm">/* the "foo_mutex" */</span>
+old = <span class="fn">rcu_dereference_protected</span>(*rate_est, 1);
+<span class="kw">if</span> (old) {
+	<span class="fn">timer_delete_sync</span>(&amp;old-&gt;timer);
+	est-&gt;avbps = old-&gt;avbps;   <span class="cm">/* the "copy" */</span>
+	est-&gt;avpps = old-&gt;avpps;
+}
+...
+<span class="fn">rcu_assign_pointer</span>(*rate_est, est); <span class="cm">/* publish */</span>
+<span class="kw">if</span> (lock)
+	<span class="fn">spin_unlock_bh</span>(lock);
+<span class="kw">if</span> (old)
+	<span class="fn">kfree_rcu</span>(old, rcu);  <span class="cm">/* free after GP */</span></pre>
+      <p class="footnote">Same five moves: lock out other updaters → fetch current with
+         <code>rcu_dereference_protected()</code> → build the replacement → publish with
+         <code>rcu_assign_pointer()</code> → defer the free past a grace period
+         (<code>kfree_rcu()</code> instead of
+         <code>synchronize_rcu();&nbsp;kfree()</code>, since this path must not block).</p>
+    </div>
+  </div>
+  <p class="footnote">Further reading in this tree: <code>Documentation/RCU/whatisRCU.rst</code>,
+     <code>listRCU.rst</code> (RCU-protected lists), <code>rcu_dereference.rst</code>
+     (what not to do with the pointer), <code>checklist.rst</code> (review checklist).
+     Keyboard: <kbd>→</kbd>/<kbd>←</kbd> step the flow nearest the top of the screen.</p>
+</section>
+
+</main>
+
+<script>
+function stepper(codeId, infoId, posId, steps, apply) {
+  const code = document.getElementById(codeId);
+  const info = document.getElementById(infoId);
+  const pos = document.getElementById(posId);
+  let s = 0;
+  function render() {
+    code.querySelectorAll('.ln').forEach(ln => {
+      const ss = ln.dataset.s.split(',').map(Number);
+      ln.classList.toggle('hl', ss.includes(s) && s !== 0);
+    });
+    info.innerHTML = steps[s];
+    pos.textContent = `step ${s} / ${steps.length - 1}`;
+    apply(s);
+  }
+  render();
+  return {
+    next() { if (s < steps.length - 1) { s++; render(); } },
+    prev() { if (s > 0) { s--; render(); } },
+    reset() { s = 0; render(); },
+    el: document.getElementById(codeId).closest('section'),
+  };
+}
+const $ = id => document.getElementById(id);
+
+/* ---------- read flow ---------- */
+const rd = stepper('readCode', 'readInfo', 'readPos', [
+  '<b>Initial state.</b> <code>gbl_foo</code> points at version A. The reader is idle. Press <b>Next</b>.',
+  '<b>rcu_read_lock()</b> — enter the read-side critical section. This is free: no atomic ops, no memory barriers, no cache-line bouncing. It simply promises "I will not block until the matching unlock".',
+  '<b>rcu_dereference(gbl_foo)</b> — snapshot the protected pointer. The macro forbids the compiler from reloading or speculating it, and on Alpha adds the needed barrier. The value is only valid inside this critical section.',
+  '<b>-&gt;a</b> — use the snapshot. Even if an updater publishes a new version B right now, our pointer to A stays valid: RCU guarantees A cannot be freed while we are inside the section.',
+  '<b>rcu_read_unlock()</b> — leave the section. From the RCU machinery\'s point of view, this reader no longer blocks any grace period.',
+  '<b>Done.</b> Total reader overhead: approximately zero. That is the whole point of RCU — reads scale perfectly because they share nothing.',
+], s => {
+  $('rdSection').style.opacity = (s >= 1 && s <= 3) ? 1 : 0;
+  $('rdSectionLbl').style.opacity = (s >= 1 && s <= 3) ? 1 : 0;
+  $('rdDeref').classList.toggle('ghost', s !== 2);
+  $('rdDeref').classList.toggle('on', s === 2);
+  $('rdDeref').setAttribute('marker-end', s === 2 ? 'url(#arrOn)' : 'url(#arr)');
+  $('rdUse').classList.toggle('ghost', s !== 3);
+  $('rdUse').classList.toggle('on', s === 3);
+  $('rdUse').setAttribute('marker-end', s === 3 ? 'url(#arrOn)' : 'url(#arr)');
+  $('rdState').textContent = ['idle', 'in critical section', 'loads pointer',
+                              'reads .a = 1', 'section closed', 'returns 1'][s];
+});
+
+/* ---------- update flow ---------- */
+const up = stepper('updCode', 'updInfo', 'updPos', [
+  '<b>Initial state.</b> <code>gbl_foo</code> → A (<code>.a = 1</code>). Reader R1 is inside a read-side critical section, dereferencing A.',
+  '<b>kmalloc()</b> — allocate the new version B. It is private to the updater; readers cannot see it yet.',
+  '<b>spin_lock(&amp;foo_mutex)</b> — RCU protects readers from updaters, <i>not</i> updaters from each other. Concurrent updaters still need ordinary locking.',
+  '<b>rcu_dereference_protected()</b> — fetch the current pointer on the update side. No read-lock needed: the lockdep expression documents that <code>foo_mutex</code> protects us.',
+  '<b>Copy, then update</b> — <code>*new_fp = *old_fp; new_fp-&gt;a = 42;</code>. This is the "copy" and "update" in Read-<b>Copy</b>-<b>Update</b>. A is untouched; R1 is undisturbed.',
+  '<b>rcu_assign_pointer()</b> — atomically publish B. The write barrier inside guarantees B\'s fields are initialized <i>before</i> the pointer flips. R1 keeps using A; brand-new reader R2 gets B. Two versions coexist.',
+  '<b>spin_unlock()</b> — updates are serialized; the pointer swap is done.',
+  '<b>synchronize_rcu()</b> — wait for the grace period: every reader that might still see A (R1) must exit its critical section. R2 is irrelevant — it started after publication, so it can only see B.',
+  '<b>kfree(old_fp)</b> — R1 is gone, so nobody can hold a reference to A. Reclaiming it now is provably safe. This deferred-free is the essence of RCU updates.',
+], s => {
+  $('upBg').style.opacity = s >= 1 ? 1 : 0;
+  $('upBa').textContent = s >= 4 ? '.a = 42' : '(uninitialized)';
+  $('upBl').textContent = s >= 5 ? '(current)' : '(private copy)';
+  $('upAl').textContent = s >= 5 ? '(stale, R1 still reads it)' : '(current)';
+  const swapped = s >= 5;
+  $('upPtrA').classList.toggle('ghost', swapped);
+  $('upPtrB').classList.toggle('ghost', !swapped);
+  $('upR2').style.opacity = s >= 5 && s <= 8 ? 1 : 0;
+  const r1gone = s >= 8;
+  $('upR1').style.opacity = r1gone ? .15 : 1;
+  $('upR1s').textContent = s >= 7 ? 'finishes & unlocks' : 'in section, sees A';
+  $('upGP').style.opacity = s === 7 ? 1 : 0;
+  const A = $('upA'), At = $('upAt');
+  if (s >= 8) { A.style.stroke = '#ef7070'; A.style.opacity = .25;
+                At.parentNode.querySelectorAll('#upAt,#upAa,#upAl')
+                  .forEach(t => t.style.opacity = .25);
+                $('upAl').textContent = 'kfree()d'; }
+  else { A.style.stroke = ''; A.style.opacity = 1;
+         At.parentNode.querySelectorAll('#upAt,#upAa,#upAl')
+           .forEach(t => t.style.opacity = 1); }
+});
+
+/* ---------- grace period animation ---------- */
+let gpBusy = false;
+function gpPlay() {
+  if (gpBusy) return; gpBusy = true;
+  const r0 = $('gpR0'), s1 = $('gpS1'), r2 = $('gpR2');
+  [['gpT0',0],['gpT1',0],['gpT2',0],['gpDone',0]].forEach(([i,o]) => $(i).style.opacity = o);
+  r0.setAttribute('width', 0); s1.setAttribute('width', 0); r2.setAttribute('width', 0);
+  const anim = (el, target, ms) => new Promise(res => {
+    const t0 = performance.now();
+    (function f(t) { const k = Math.min(1, (t - t0) / ms);
+      el.setAttribute('width', (target * k).toFixed(1));
+      k < 1 ? requestAnimationFrame(f) : res(); })(t0);
+  });
+  (async () => {
+    $('gpT0').style.opacity = 1; const p0 = anim(r0, 330, 2600);   // CPU0 reader
+    await new Promise(r => setTimeout(r, 500));
+    $('gpT1').style.opacity = 1; const p1 = anim(s1, 270, 2400);   // sync_rcu spans until CPU0 ends
+    await new Promise(r => setTimeout(r, 500));
+    $('gpT2').style.opacity = 1; const p2 = anim(r2, 330, 3400);   // CPU2 reader, longer
+    await p0; await p1;
+    $('gpDone').style.opacity = 1;
+    await p2; gpBusy = false;
+  })();
+}
+
+/* ---------- two readers timeline ---------- */
+const twT = i => 50 + i * 50;
+const tw = stepper('twoCode', 'twoInfo', 'twoPos', [
+  '<b>Initial state.</b> <code>gbl_foo</code> → A. Nobody is reading, the updater hasn\'t started. Step through the trace on the left.',
+  '<b>R1 enters before the update.</b> <code>rcu_read_lock()</code> + <code>rcu_dereference()</code> → R1 now holds a pointer to <b>A</b>. Any grace period that starts from here on must wait for R1.',
+  '<b>The update begins.</b> The updater allocates B and copies A into it, setting <code>.a&nbsp;=&nbsp;42</code>. B is still private — R1 reads A undisturbed, no reader is ever blocked.',
+  '<b>Publication.</b> <code>rcu_assign_pointer(gbl_foo, B)</code> — the pointer flips atomically. R1 keeps using its snapshot of A; that is legal until it unlocks. Two versions now coexist.',
+  '<b>synchronize_rcu() — the grace period starts.</b> It must wait for every read-side critical section that began before this call: that is exactly <b>R1</b>, which might still dereference A.',
+  '<b>R2 enters after the update began.</b> Its <code>rcu_dereference()</code> can only return <b>B</b> — A was unpublished a while ago. The grace period does <b>not</b> wait for R2: it started after <code>synchronize_rcu()</code>, so it cannot possibly hold A.',
+  '<b>R1 unlocks.</b> The last reader that predates the grace period is gone — <code>synchronize_rcu()</code> returns immediately, even though R2 is still happily reading.',
+  '<b>kfree(A).</b> Provably safe: every reader that could have seen A has finished, and every reader still running (R2) is on B.',
+  '<b>R2 unlocks.</b> Done. Note what never happened: no reader waited, no reader took a lock, and the updater only ever waited for readers that could actually hold the stale pointer.',
+], s => {
+  const clampBar = (id, from, to) => {
+    const el = $(id), w = s >= from ? twT(Math.min(s, to)) - twT(from) : 0;
+    el.setAttribute('width', Math.max(w, s >= from ? 6 : 0));
+  };
+  clampBar('twR1bar', 1, 6);
+  clampBar('twPrep', 2, 4);
+  clampBar('twGP', 4, 6);
+  clampBar('twR2bar', 5, 8);
+  $('twPub').style.opacity = s >= 3 ? 1 : 0;
+  $('twPubLbl').style.opacity = s >= 3 ? 1 : 0;
+  $('twR1lbl').style.opacity = s >= 1 ? 1 : 0;
+  $('twR2lbl').style.opacity = s >= 5 ? 1 : 0;
+  $('twGPlbl').style.opacity = s >= 4 ? 1 : 0;
+  $('twGPlbl').textContent = s >= 6 ? 'grace period over — only R1 mattered' : 'grace period';
+  $('twFree').style.opacity = s >= 7 ? 1 : 0;
+  $('twNow').style.opacity = s >= 1 ? 1 : 0;
+  $('twNow').setAttribute('x1', twT(s)); $('twNow').setAttribute('x2', twT(s));
+  $('twPtr').textContent = s >= 3 ? 'gbl_foo → B' : 'gbl_foo → A';
+  const a = $('twA');
+  a.textContent = s >= 7 ? 'A: freed' : 'A: live';
+  a.style.fill = s >= 7 ? '#ef7070' : '';
+});
+
+/* ---------- mutex race toggle ---------- */
+let raceShown = false;
+function toggleRace() {
+  raceShown = !raceShown;
+  $('raceBadCol').style.opacity = raceShown ? 1 : .25;
+  $('raceBtn').textContent = raceShown ? 'Hide the race' : 'Show the race (no mutex)';
+  $('raceBtn').classList.toggle('primary', !raceShown);
+}
+
+/* keyboard: arrows drive whichever interactive section is nearest viewport top */
+document.addEventListener('keydown', e => {
+  if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+  const pick = [rd, up, tw].map(o => ({ o, d: Math.abs(o.el.getBoundingClientRect().top) }))
+                       .sort((a, b) => a.d - b.d)[0].o;
+  e.key === 'ArrowRight' ? pick.next() : pick.prev();
+});
+</script>
+</body>
+</html>
