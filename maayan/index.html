@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ingestion Queue + SSE — how it works</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pur:#bc8cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}
+  header{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 4px;font-size:22px}
+  header p{margin:0;color:var(--dim)}
+  .wrap{display:grid;grid-template-columns:1.35fr 1fr;gap:0;min-height:calc(100vh - 86px)}
+  .left{padding:24px 28px;border-right:1px solid var(--line)}
+  .right{padding:24px 28px;display:flex;flex-direction:column;gap:16px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 12px}
+  .diagram{position:relative}
+  .node{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;cursor:pointer;transition:.15s;position:relative}
+  .node:hover{border-color:var(--acc)}
+  .node.active{border-color:var(--acc);box-shadow:0 0 0 2px rgba(88,166,255,.25)}
+  .node.lit{border-color:var(--ok);box-shadow:0 0 18px rgba(63,185,80,.35)}
+  .node .t{font-weight:600;font-size:14px}
+  .node .s{color:var(--dim);font-size:12px;font-family:var(--mono);margin-top:3px}
+  .row{display:flex;gap:14px;align-items:stretch;margin:0 0 14px}
+  .row>.node{flex:1}
+  .tier{margin:0 0 10px}
+  .arrow{color:var(--dim);align-self:center;font-size:20px;flex:0 0 auto}
+  .badge{position:absolute;top:-9px;right:10px;font:11px/1 var(--mono);background:var(--acc);color:#04101f;padding:3px 6px;border-radius:6px}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 4px}
+  button{background:var(--acc);color:#04101f;border:0;border-radius:8px;padding:9px 14px;font-weight:600;cursor:pointer;font-size:14px}
+  button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+  button.bad{background:var(--bad);color:#1a0202}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .steps{display:flex;gap:8px;margin:8px 0}
+  .step{flex:1;text-align:center;padding:9px 4px;border:1px solid var(--line);border-radius:8px;font-size:12.5px;color:var(--dim);background:var(--panel)}
+  .step.on{color:var(--ink);border-color:var(--acc);background:#10243f}
+  .step.done{color:var(--ok);border-color:var(--ok)}
+  .step.human{color:var(--warn);border-color:var(--warn);background:#2a2410}
+  .log{background:#010409;border:1px solid var(--line);border-radius:10px;padding:12px;font-family:var(--mono);font-size:12.5px;flex:1;overflow:auto;min-height:200px;white-space:pre-wrap}
+  .log .ev{color:var(--pur)} .log .k{color:var(--acc)} .log .v{color:var(--ok)}
+  .log .meta{color:var(--dim)} .log .crash{color:var(--bad)} .log .replay{color:var(--warn)}
+  .browser{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .browser .bar{background:var(--panel);padding:7px 10px;display:flex;gap:6px;align-items:center;border-bottom:1px solid var(--line)}
+  .dot{width:10px;height:10px;border-radius:50%}
+  .browser .body{padding:14px;min-height:74px;background:#0b0f14}
+  .browser.crashed .body{background:repeating-linear-gradient(45deg,#1a0202,#1a0202 10px,#250404 10px,#250404 20px);color:var(--bad)}
+  .ls{font-family:var(--mono);font-size:12px;color:var(--dim);margin-top:6px}
+  .ls b{color:var(--acc)}
+  .info{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:8px;padding:12px 14px;font-size:13.5px;color:var(--dim);min-height:120px}
+  .info h3{margin:0 0 6px;color:var(--ink);font-size:14px}
+  .info code{font-family:var(--mono);color:var(--pur);font-size:12.5px}
+  .hl{color:var(--ink)}
+  footer{padding:14px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Ingestion queue + SSE — how it works</h1>
+  <p>DB-backed Sequelize job queue. Upload returns instantly; a worker runs the <b>identical</b> Gemini ingestion; the browser watches progress over Server-Sent Events. Click any box for the code it maps to.</p>
+</header>
+
+<div class="wrap">
+  <div class="left">
+    <h2>Component map — click a box</h2>
+    <div class="diagram">
+      <div class="tier"><div class="node" data-k="browser" id="n-browser"><div class="t">🧭 Browser</div><div class="s">EventSource → /jobs/:id/events · localStorage[jobId]</div></div></div>
+      <div class="arrow" style="text-align:center">▼ &nbsp; POST /api/ingestion/upload (multipart)</div>
+      <div class="tier"><div class="node" data-k="handler" id="n-handler"><div class="t">⚡ Upload handler</div><div class="s">ingestion.controller.ts · uploadObject() → create job → 202 {jobId}</div><span class="badge">returns in ms</span></div></div>
+      <div class="arrow" style="text-align:center">▼ &nbsp; INSERT row</div>
+      <div class="row">
+        <div class="node" data-k="queue" id="n-queue"><div class="t">🗃️ ingestion_jobs</div><div class="s">Sequelize table · status · step · result(JSONB)</div></div>
+        <div class="arrow">↔</div>
+        <div class="node" data-k="s3" id="n-s3"><div class="t">📦 S3 / MinIO</div><div class="s">raw bytes · documents/&lt;uuid&gt;</div></div>
+      </div>
+      <div class="arrow" style="text-align:center">▼ &nbsp; SELECT … FOR UPDATE SKIP LOCKED (poll)</div>
+      <div class="tier"><div class="node" data-k="worker" id="n-worker"><div class="t">⚙️ Worker (in-process)</div><div class="s">ingestion.worker.ts · runIngestion() — same code as today</div></div></div>
+      <div class="row">
+        <div class="node" data-k="gemini" id="n-gemini"><div class="t">🤖 Gemini</div><div class="s">classify + extract · @google/genai</div></div>
+        <div class="arrow">→</div>
+        <div class="node" data-k="doc" id="n-doc"><div class="t">📄 Document</div><div class="s">finalized · or pending_review (human)</div></div>
+      </div>
+      <div class="arrow" style="text-align:center">⤴ &nbsp; worker writes step → job row &nbsp; · &nbsp; SSE handler polls row → browser</div>
+    </div>
+
+    <div class="info" id="info">
+      <h3>Click a component</h3>
+      Each box maps to a real file. The arrows are the data path: the queue row is the single
+      source of truth, which is exactly why a browser crash loses nothing.
+    </div>
+  </div>
+
+  <div class="right">
+    <h2>Live demo</h2>
+    <div class="controls">
+      <button id="btn-upload">⬆ Upload a document</button>
+      <button id="btn-crash" class="bad" disabled>💥 Crash browser</button>
+      <button id="btn-reopen" class="ghost" disabled>↻ Reopen tab</button>
+      <button id="btn-reset" class="ghost">Reset</button>
+    </div>
+
+    <div class="steps" id="steps">
+      <div class="step" data-step="uploading">Uploading</div>
+      <div class="step" data-step="analyzing">Analyzing&nbsp;(Gemini)</div>
+      <div class="step" data-step="waiting_for_human">Waiting for human</div>
+    </div>
+
+    <div class="browser" id="sim">
+      <div class="bar"><span class="dot" style="background:#f85149"></span><span class="dot" style="background:#d29922"></span><span class="dot" style="background:#3fb950"></span><span style="color:var(--dim);font-family:var(--mono);font-size:12px">app://deal/42/upload</span></div>
+      <div class="body" id="sim-body">Idle. Hit <b>Upload</b>.</div>
+    </div>
+    <div class="ls" id="ls">localStorage: <b id="ls-val">∅</b></div>
+
+    <h2 style="margin-top:6px">SSE event stream (server → browser)</h2>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<footer>Self-contained simulation — no backend required. The timings are faked; the <b>flow</b>, the event shapes, and the crash-recovery behaviour mirror the plan in <code>plan.md</code>.</footer>
+
+<script>
+const INFO = {
+  browser:{h:"🧭 Browser",b:"Posts the file, gets back <code>{jobId}</code>, writes it to <span class='hl'>localStorage</span>, then opens an <code>EventSource</code> on <code>/api/ingestion/jobs/:jobId/events</code>. The connection is disposable — the jobId is what matters.<br><br><code>frontend/src/features/ingestion/services/ingestion-api.ts</code>"},
+  handler:{h:"⚡ Upload handler",b:"Does only the fast work: resolve dealId, push raw bytes to S3, <span class='hl'>INSERT one job row</span> (status=queued, step=uploading), respond <code>202 {jobId}</code>. No Gemini call here — that's why it returns in milliseconds instead of blocking on two LLM round-trips.<br><br><code>backend/src/features/ingestion/ingestion.controller.ts:8</code>"},
+  queue:{h:"🗃️ ingestion_jobs (the queue)",b:"A plain Sequelize table — <span class='hl'>no Redis, no Bull</span>. Columns: <code>status</code>, <code>step</code>, <code>documentId</code>, <code>result</code> (JSONB), <code>error</code>. This row is the <span class='hl'>single source of truth</span>: both the worker and the SSE handler read/write it. Survives any client crash.<br><br>New model <code>backend/models/IngestionJob.ts</code> + migration."},
+  s3:{h:"📦 S3 / MinIO",b:"Raw upload bytes are stored synchronously by the handler so the request can return. The worker later reloads them with <code>getObjectStream(s3Key)</code> — decoupling the upload from the slow analysis.<br><br><code>backend/config/minio.ts:208</code>"},
+  worker:{h:"⚙️ Worker (in-process)",b:"A <code>setInterval</code> poll loop. Claims one queued job with <code>SELECT … FOR UPDATE SKIP LOCKED</code> (safe even across multiple server instances), sets step=analyzing, then calls <span class='hl'>runIngestion()</span> — the <span class='hl'>exact same</span> parse→classify→extract→conflict→persist code that runs synchronously today, just lifted out of the request.<br><br><code>backend/src/features/ingestion/ingestion.worker.ts</code> (new), reusing <code>ingestion.service.ts:45</code>"},
+  gemini:{h:"🤖 Gemini",b:"Two calls, unchanged: <code>classifyDocument</code> then <code>extractFields</code>, both via <code>@google/genai</code> with the same prompts. The queue changes <em>when</em> these run (in the worker), not <em>how</em>.<br><br><code>backend/src/features/ingestion/ingestion.service.ts:388,424</code>"},
+  doc:{h:"📄 Document",b:"Worker persists the result exactly as before: <code>finalized</code> normally, or <code>pending_review</code> when an OA entity conflict needs a human. The conflict resolution endpoints (<code>/conflicts/:id/...</code>) are untouched.<br><br><code>backend/src/features/ingestion/ingestion.service.ts:222,300</code>"}
+};
+const nodes=[...document.querySelectorAll('.node')];
+const info=document.getElementById('info');
+nodes.forEach(n=>n.addEventListener('click',()=>{
+  nodes.forEach(x=>x.classList.remove('active'));n.classList.add('active');
+  const d=INFO[n.dataset.k];info.innerHTML='<h3>'+d.h+'</h3>'+d.b;
+}));
+
+const log=document.getElementById('log'), steps=document.getElementById('steps');
+const simBody=document.getElementById('sim-body'), sim=document.getElementById('sim');
+const lsVal=document.getElementById('ls-val');
+const bUp=document.getElementById('btn-upload'),bCr=document.getElementById('btn-crash'),
+      bRe=document.getElementById('btn-reopen'),bRs=document.getElementById('btn-reset');
+
+let jobId=null, store={}, timers=[], serverStep='idle', sseOpen=false;
+const order=['uploading','analyzing','waiting_for_human'];
+const t=(s)=>{const id=setTimeout(s.fn,s.ms);timers.push(id);};
+
+function clearTimers(){timers.forEach(clearTimeout);timers=[];}
+function line(html){const d=document.createElement('div');d.innerHTML=html;log.appendChild(d);log.scrollTop=log.scrollHeight;}
+function litNode(k){nodes.forEach(x=>x.classList.remove('lit'));const n=nodes.find(x=>x.dataset.k===k);if(n)n.classList.add('lit');}
+function paintSteps(step,terminalDone){
+  [...steps.children].forEach(c=>{c.className='step';
+    const i=order.indexOf(c.dataset.step), cur=order.indexOf(step);
+    if(c.dataset.step==='waiting_for_human'&&step==='waiting_for_human'){c.classList.add('human');}
+    else if(i<cur){c.classList.add('done');}
+    else if(i===cur){c.classList.add('on');}
+  });
+  if(terminalDone){[...steps.children].forEach(c=>c.classList.add('done'));}
+}
+function setLS(){lsVal.textContent=jobId?('{ jobId: '+jobId+' }'):'∅';}
+
+// One SSE event as the browser would receive it
+function emit(step,extra){
+  serverStep=step;
+  const lit={uploading:'handler',analyzing:'gemini',waiting_for_human:'doc'}[step]||'worker';
+  litNode(lit);
+  paintSteps(step,false);
+  line('<span class="meta">event: </span><span class="ev">progress</span>\n'+
+       '<span class="meta">data: </span>{ <span class="k">"jobId"</span>: '+jobId+', <span class="k">"step"</span>: <span class="v">"'+step+'"</span>'+(extra||'')+' }\n');
+  simBody.innerHTML=({
+    uploading:'⬆ <b>Uploading…</b> file stored, job queued.',
+    analyzing:'🤖 <b>Analyzing with Gemini…</b> classify + extract.',
+    waiting_for_human:'🟡 <b>Waiting for human input</b> — entity conflict, open resolution modal.'
+  })[step];
+}
+
+function schedule(fromStep){
+  // server-side progression; runs regardless of whether the browser is connected
+  const plan=[
+    {ms:300,step:'uploading'},
+    {ms:1700,step:'analyzing',extra:', <span class="k">"detail"</span>: "classifyDocument"'},
+    {ms:3400,step:'analyzing',extra:', <span class="k">"detail"</span>: "extractFields"'},
+    {ms:4800,step:'waiting_for_human',extra:', <span class="k">"status"</span>: "waiting_for_human", <span class="k">"documentId"</span>: 7'}
+  ];
+  const start=order.indexOf(fromStep);
+  plan.forEach(p=>{
+    if(order.indexOf(p.step)<start) return; // already past on server
+    t({ms:p.ms,fn:()=>{ store.step=p.step; if(sseOpen) emit(p.step,p.extra); if(p.step==='waiting_for_human'){store.terminal=true; bCr.disabled=true;} }});
+  });
+}
+
+bUp.addEventListener('click',()=>{
+  reset(false);
+  jobId=Math.floor(1000+Math.random()*9000);
+  store={step:'uploading',terminal:false};
+  setLS();
+  line('<span class="meta">POST /api/ingestion/upload → </span><span class="v">202</span> { jobId: '+jobId+' }');
+  line('<span class="meta">localStorage["job:deal42"] = '+jobId+'</span>');
+  line('<span class="meta">EventSource("/api/ingestion/jobs/'+jobId+'/events") open</span>\n');
+  sseOpen=true; litNode('handler');
+  bUp.disabled=true; bCr.disabled=false; bRe.disabled=true;
+  schedule('uploading');
+});
+
+bCr.addEventListener('click',()=>{
+  // browser dies. SSE connection drops. Server keeps working.
+  sseOpen=false; sim.classList.add('crashed');
+  simBody.innerHTML='💥 <b>Tab crashed.</b> EventSource closed.';
+  line('\n<span class="crash">✗ browser crashed — EventSource connection dropped</span>');
+  line('<span class="crash">  (jobId '+jobId+' still in localStorage; worker keeps running server-side)</span>\n');
+  bCr.disabled=true; bRe.disabled=false;
+});
+
+bRe.addEventListener('click',()=>{
+  sim.classList.remove('crashed');
+  line('<span class="replay">↻ tab reopened</span>');
+  const saved=jobId;
+  line('<span class="replay">  read localStorage["job:deal42"] → '+saved+'</span>');
+  line('<span class="replay">  reconnect EventSource("/api/ingestion/jobs/'+saved+'/events")</span>');
+  line('<span class="replay">  server reads job row, replays current step immediately:</span>');
+  sseOpen=true; bRe.disabled=true;
+  // crash-recovery: server emits whatever the current DB state is, right now
+  emit(store.step, store.terminal?', <span class="k">"status"</span>: "waiting_for_human", <span class="k">"documentId"</span>: 7':'');
+  if(store.terminal){paintSteps('waiting_for_human',false);}
+  else { schedule(store.step); bCr.disabled=false; }
+});
+
+function reset(full){
+  clearTimers(); sseOpen=false; sim.classList.remove('crashed');
+  log.innerHTML=''; paintSteps('idle',false); litNode('');
+  simBody.innerHTML='Idle. Hit <b>Upload</b>.';
+  bUp.disabled=false; bCr.disabled=true; bRe.disabled=true;
+  if(full){jobId=null; store={}; setLS();}
+}
+bRs.addEventListener('click',()=>reset(true));
+reset(true);
+</script>
+</body>
+</html>
