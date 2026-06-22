@@ -55,6 +55,10 @@
   .info h3{margin:0 0 6px;color:var(--ink);font-size:14px}
   .info code{font-family:var(--mono);color:var(--pur);font-size:12.5px}
   .hl{color:var(--ink)}
+  .info pre{margin:10px 0 0;background:#010409;border:1px solid var(--line);border-radius:8px;padding:10px 12px;overflow:auto;font-family:var(--mono);font-size:11.8px;line-height:1.5;color:#c9d1d9;max-height:300px}
+  .info pre .cm{color:var(--dim)} .info pre .kw{color:#ff7b72} .info pre .fn{color:#d2a8ff}
+  .info pre .st{color:#a5d6ff} .info pre .nw{color:var(--ok)}
+  .info .cap{margin-top:10px;font-size:11.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
   footer{padding:14px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
 </style>
 </head>
@@ -84,7 +88,7 @@
         <div class="arrow">→</div>
         <div class="node" data-k="doc" id="n-doc"><div class="t">📄 Document</div><div class="s">finalized · or pending_review (human)</div></div>
       </div>
-      <div class="arrow" style="text-align:center">⤴ &nbsp; worker writes step → job row &nbsp; · &nbsp; SSE handler polls row → browser</div>
+      <div class="arrow" style="text-align:center">⤴ &nbsp; worker writes step → job row &nbsp; · &nbsp; <a href="#" id="sse-link" style="color:var(--acc);text-decoration:underline dotted">📡 SSE handler</a> polls row → browser</div>
     </div>
 
     <div class="info" id="info">
@@ -123,21 +127,170 @@
 <footer>Self-contained simulation — no backend required. The timings are faked; the <b>flow</b>, the event shapes, and the crash-recovery behaviour mirror the plan in <code>plan.md</code>.</footer>
 
 <script>
+// k=keyword kw, f=function fn, s=string st, c=comment cm, n=NEW-code nw
+function K(s){return '<span class="kw">'+s+'</span>'}
+function F(s){return '<span class="fn">'+s+'</span>'}
+function S(s){return '<span class="st">'+s+'</span>'}
+function C(s){return '<span class="cm">'+s+'</span>'}
+function N(s){return '<span class="nw">'+s+'</span>'}
+
 const INFO = {
-  browser:{h:"🧭 Browser",b:"Posts the file, gets back <code>{jobId}</code>, writes it to <span class='hl'>localStorage</span>, then opens an <code>EventSource</code> on <code>/api/ingestion/jobs/:jobId/events</code>. The connection is disposable — the jobId is what matters.<br><br><code>frontend/src/features/ingestion/services/ingestion-api.ts</code>"},
-  handler:{h:"⚡ Upload handler",b:"Does only the fast work: resolve dealId, push raw bytes to S3, <span class='hl'>INSERT one job row</span> (status=queued, step=uploading), respond <code>202 {jobId}</code>. No Gemini call here — that's why it returns in milliseconds instead of blocking on two LLM round-trips.<br><br><code>backend/src/features/ingestion/ingestion.controller.ts:8</code>"},
-  queue:{h:"🗃️ ingestion_jobs (the queue)",b:"A plain Sequelize table — <span class='hl'>no Redis, no Bull</span>. Columns: <code>status</code>, <code>step</code>, <code>documentId</code>, <code>result</code> (JSONB), <code>error</code>. This row is the <span class='hl'>single source of truth</span>: both the worker and the SSE handler read/write it. Survives any client crash.<br><br>New model <code>backend/models/IngestionJob.ts</code> + migration."},
-  s3:{h:"📦 S3 / MinIO",b:"Raw upload bytes are stored synchronously by the handler so the request can return. The worker later reloads them with <code>getObjectStream(s3Key)</code> — decoupling the upload from the slow analysis.<br><br><code>backend/config/minio.ts:208</code>"},
-  worker:{h:"⚙️ Worker (in-process)",b:"A <code>setInterval</code> poll loop. Claims one queued job with <code>SELECT … FOR UPDATE SKIP LOCKED</code> (safe even across multiple server instances), sets step=analyzing, then calls <span class='hl'>runIngestion()</span> — the <span class='hl'>exact same</span> parse→classify→extract→conflict→persist code that runs synchronously today, just lifted out of the request.<br><br><code>backend/src/features/ingestion/ingestion.worker.ts</code> (new), reusing <code>ingestion.service.ts:45</code>"},
-  gemini:{h:"🤖 Gemini",b:"Two calls, unchanged: <code>classifyDocument</code> then <code>extractFields</code>, both via <code>@google/genai</code> with the same prompts. The queue changes <em>when</em> these run (in the worker), not <em>how</em>.<br><br><code>backend/src/features/ingestion/ingestion.service.ts:388,424</code>"},
-  doc:{h:"📄 Document",b:"Worker persists the result exactly as before: <code>finalized</code> normally, or <code>pending_review</code> when an OA entity conflict needs a human. The conflict resolution endpoints (<code>/conflicts/:id/...</code>) are untouched.<br><br><code>backend/src/features/ingestion/ingestion.service.ts:222,300</code>"}
+  browser:{h:"🧭 Browser",
+    b:"Posts the file, gets back <code>{jobId}</code>, writes it to <span class='hl'>localStorage</span>, then opens an <code>EventSource</code> on <code>/api/ingestion/jobs/:jobId/events</code>. The connection is disposable — the jobId is what matters.",
+    cap:"frontend — ingestion-api.ts + hooks.ts (proposed)",
+    c:`${C('// upload returns immediately with a jobId')}
+${K('const')} { jobId } = ${K('await')} ${F('apiFetch')}(${S('"/ingestion/upload"')}, {
+  method: ${S('"POST"')}, body: formData,
+});
+${N('localStorage')}.${F('setItem')}(${S('`job:deal${dealId}`')}, ${K('String')}(jobId));
+
+${C('// subscribe — and on reconnect the server replays current state')}
+${K('const')} es = ${K('new')} ${F('EventSource')}(${S('`/api/ingestion/jobs/${jobId}/events`')});
+es.${F('onmessage')} = (e) => {
+  ${K('const')} { step, status, result } = ${F('JSON.parse')}(e.data);
+  ${F('setStep')}(step);                ${C('// uploading | analyzing | waiting_for_human')}
+  ${K('if')} (status === ${S('"waiting_for_human"')}) ${F('openConflictModal')}(result.conflict);
+};`},
+
+  handler:{h:"⚡ Upload handler",
+    b:"Does only the fast work: resolve dealId, push raw bytes to S3, <span class='hl'>INSERT one job row</span>, respond <code>202 {jobId}</code>. No Gemini call here — that's why it returns in milliseconds instead of blocking on two LLM round-trips.",
+    cap:"backend/src/features/ingestion/ingestion.controller.ts (proposed)",
+    c:`${K('public async')} ${F('uploadAndExtract')}(req, res) {
+  ${K('const')} file = req.file;
+  ${K('if')} (!file) ${K('return')} res.${F('status')}(400).${F('json')}({ message: ${S('"Missing file."')} });
+
+  ${K('const')} dealId = ${K('await')} ${F('resolveDealId')}(req.body.dealId);
+  ${K('const')} ext = path.${F('extname')}(file.originalname).${F('toLowerCase')}();
+  ${K('const')} s3Key = ${S('`documents/${randomUUID()}${ext}`')};
+  ${K('await')} ${F('uploadObject')}({ key: s3Key, body: file.buffer, contentType: file.mimetype });
+
+  ${N('// enqueue — the worker does the slow part')}
+  ${K('const')} job = ${K('await')} ${N('IngestionJob')}.${F('create')}({
+    dealId, s3Key, fileName: file.originalname, mimeType: file.mimetype,
+    status: ${S('"queued"')}, step: ${S('"uploading"')},
+  });
+  res.${F('status')}(${N('202')}).${F('json')}({ jobId: job.id, status: ${S('"queued"')} });
+}`},
+
+  queue:{h:"🗃️ ingestion_jobs (the queue)",
+    b:"A plain Sequelize table — <span class='hl'>no Redis, no Bull</span>. This row is the <span class='hl'>single source of truth</span>: both the worker and the SSE handler read/write it. Survives any client crash.",
+    cap:"backend/models/IngestionJob.ts (new)",
+    c:`${K('export const')} ${F('createIngestionJobModel')} = (sequelize) =>
+  sequelize.${F('define')}(${S('"IngestionJob"')}, {
+    id:        { type: DataTypes.INTEGER, primaryKey: ${K('true')}, autoIncrement: ${K('true')} },
+    dealId:    { type: DataTypes.INTEGER, allowNull: ${K('false')} },
+    s3Key:     { type: DataTypes.STRING },
+    fileName:  { type: DataTypes.STRING },
+    mimeType:  { type: DataTypes.STRING },
+    status:    { type: DataTypes.STRING, defaultValue: ${S('"queued"')} },  ${C('// queued|processing|waiting_for_human|done|failed')}
+    step:      { type: DataTypes.STRING, defaultValue: ${S('"uploading"')} }, ${C('// UI label')}
+    documentId:{ type: DataTypes.INTEGER, allowNull: ${K('true')} },
+    result:    { type: DataTypes.JSONB,  allowNull: ${K('true')} },  ${C('// the IngestionResponse')}
+    error:     { type: DataTypes.TEXT,   allowNull: ${K('true')} },
+    attempts:  { type: DataTypes.INTEGER, defaultValue: 0 },
+  }, { tableName: ${S('"ingestion_jobs"')}, underscored: ${K('true')}, timestamps: ${K('true')} });`},
+
+  s3:{h:"📦 S3 / MinIO",
+    b:"Raw upload bytes are stored synchronously by the handler so the request can return. The worker later reloads them — decoupling the upload from the slow analysis.",
+    cap:"backend/config/minio.ts:208 (existing)",
+    c:`${C('// already exists — the worker reuses it to reload bytes')}
+${K('export async function')} ${F('getObjectStream')}(key) {
+  ${K('const')} out = ${K('await')} s3.${F('send')}(
+    ${K('new')} ${F('GetObjectCommand')}({ Bucket: env.S3_BUCKET, Key: key }),
+  );
+  ${K('return')} out.Body;  ${C('// stream → buffer in the worker')}
+}`},
+
+  worker:{h:"⚙️ Worker (in-process)",
+    b:"A <code>setInterval</code> poll loop. Claims one queued job with <code>FOR UPDATE SKIP LOCKED</code> (safe across instances), then calls <span class='hl'>runIngestion()</span> — the <span class='hl'>exact same</span> parse→classify→extract→conflict→persist code that runs synchronously today, just lifted out of the request.",
+    cap:"backend/src/features/ingestion/ingestion.worker.ts (new)",
+    c:`${K('export function')} ${F('startIngestionWorker')}() {
+  ${F('setInterval')}(${K('async')} () => {
+    ${K('await')} sequelize.${F('transaction')}(${K('async')} (tx) => {
+      ${C('// claim ONE queued job — safe even with many server instances')}
+      ${K('const')} [job] = ${K('await')} ${N('IngestionJob')}.${F('findAll')}({
+        where: { status: ${S('"queued"')} }, limit: 1,
+        ${N('lock: tx.LOCK.UPDATE, skipLocked: true')}, transaction: tx,
+      });
+      ${K('if')} (!job) ${K('return')};
+      ${K('await')} job.${F('update')}({ status: ${S('"processing"')}, step: ${S('"analyzing"')} }, { transaction: tx });
+    });
+
+    ${K('const')} job = ${K('await')} ${N('IngestionJob')}.${F('findOne')}({ where: { status: ${S('"processing"')} } });
+    ${K('if')} (!job) ${K('return')};
+    ${K('try')} {
+      ${K('const')} buffer = ${K('await')} ${F('streamToBuffer')}(${K('await')} ${F('getObjectStream')}(job.s3Key));
+      ${N('// SAME ingestion as today — extracted verbatim from processUpload')}
+      ${K('const')} result = ${K('await')} service.${F('runIngestion')}(buffer, job.fileName, job.mimeType, job.dealId, job.s3Key);
+      ${K('const')} done = result.status === ${S('"conflict"')}
+        ? { status: ${S('"waiting_for_human"')}, step: ${S('"waiting_for_human"')} }
+        : { status: ${S('"done"')},             step: ${S('"finalized"')} };
+      ${K('await')} job.${F('update')}({ ...done, documentId: result.documentId, result });
+    } ${K('catch')} (e) {
+      ${K('await')} job.${F('update')}({ status: ${S('"failed"')}, error: ${K('String')}(e) });
+    }
+  }, 1000);  ${C('// ponytail: poll loop; LISTEN/NOTIFY later if load demands')}
+}`},
+
+  gemini:{h:"🤖 Gemini",
+    b:"Two calls, <span class='hl'>unchanged</span>: <code>classifyDocument</code> then <code>extractFields</code>, both via <code>@google/genai</code> with the same prompts. The queue changes <em>when</em> these run (in the worker), not <em>how</em>.",
+    cap:"backend/src/features/ingestion/ingestion.service.ts:404 (existing)",
+    c:`${C('// runs identically — now inside the worker instead of the request')}
+${K('const')} response = ${K('await')} ai.models.${F('generateContent')}({
+  model: env.GEMINI_MODEL,                       ${C('// gemini-2.5-flash')}
+  contents: ${K('this')}.${F('buildModelContents')}(prompt, parsed),
+  config: { responseMimeType: ${S('"application/json"')} },
+});
+${K('const')} rawJson = ${F('parseJsonFromModelResponse')}(response.text ?? ${S('""')});
+${K('const')} validated = ClassificationResultSchema.${F('parse')}(rawJson);`},
+
+  doc:{h:"📄 Document",
+    b:"Worker persists the result exactly as before: <code>finalized</code> normally, or <code>pending_review</code> when an OA entity conflict needs a human. The conflict resolution endpoints are untouched.",
+    cap:"backend/src/features/ingestion/ingestion.service.ts:222 (existing)",
+    c:`${C('// conflict path → "waiting for human input" (unchanged)')}
+${K('const')} documentRow = ${K('await')} Document.${F('create')}({
+  dealId, fileName, mimeType, documentType,
+  url: s3Key, extractionPayload,
+  status: ${S('"pending_review"')},   ${C('// vs default "finalized"')}
+});
+${K('return')} {
+  documentId: documentRow.${F('get')}(${S('"id"')}), status: ${S('"conflict"')},
+  conflict: { kind, extractedEntityName, deal, currentEntity },
+};`}
 };
+
+const SSE = {h:"📡 SSE endpoint",
+  b:"On connect it <span class='hl'>immediately emits the current job row</span> (this is the crash-recovery replay), then polls for changes and closes on a terminal status. No in-memory state — pure DB reads.",
+  cap:"backend/src/features/ingestion/ingestion.routes.ts (proposed)",
+  c:`ingestionRouter.${F('get')}(${S('"/jobs/:jobId/events"')}, ${K('async')} (req, res) => {
+  res.${F('set')}({ ${S('"Content-Type"')}: ${S('"text/event-stream"')}, ${S('"Cache-Control"')}: ${S('"no-cache"')}, Connection: ${S('"keep-alive"')} });
+  ${K('let')} last = ${S('""')};
+  ${K('const')} tick = ${K('async')} () => {
+    ${K('const')} job = ${K('await')} ${N('IngestionJob')}.${F('findByPk')}(req.params.jobId);
+    ${K('if')} (!job) ${K('return')};
+    ${K('const')} snap = ${F('JSON.stringify')}({ jobId: job.id, step: job.step, status: job.status, documentId: job.documentId, result: job.result });
+    ${K('if')} (snap !== last) { last = snap; res.${F('write')}(${S('`data: ${snap}\\n\\n`')}); }  ${C('// emit on change')}
+    ${K('if')} ([${S('"done"')}, ${S('"waiting_for_human"')}, ${S('"failed"')}].${F('includes')}(job.status)) { ${F('clearInterval')}(iv); res.${F('end')}(); }
+  };
+  ${K('await')} ${F('tick')}();                 ${N('// replay current state on (re)connect → crash recovery')}
+  ${K('const')} iv = ${F('setInterval')}(tick, 1000);
+  req.${F('on')}(${S('"close"')}, () => ${F('clearInterval')}(iv));
+});`};
+
 const nodes=[...document.querySelectorAll('.node')];
 const info=document.getElementById('info');
+function render(d){
+  info.innerHTML='<h3>'+d.h+'</h3>'+d.b+
+    (d.cap?'<div class="cap">'+d.cap+'</div>':'')+
+    (d.c?'<pre>'+d.c+'</pre>':'');
+}
 nodes.forEach(n=>n.addEventListener('click',()=>{
   nodes.forEach(x=>x.classList.remove('active'));n.classList.add('active');
-  const d=INFO[n.dataset.k];info.innerHTML='<h3>'+d.h+'</h3>'+d.b;
+  render(INFO[n.dataset.k]);
 }));
+document.getElementById('sse-link').addEventListener('click',(e)=>{
+  e.preventDefault();nodes.forEach(x=>x.classList.remove('active'));render(SSE);
+});
 
 const log=document.getElementById('log'), steps=document.getElementById('steps');
 const simBody=document.getElementById('sim-body'), sim=document.getElementById('sim');
