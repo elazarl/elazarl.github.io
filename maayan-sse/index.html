@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Server-Sent Events — how it actually works</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pur:#bc8cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}
+  header{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 4px;font-size:22px}
+  header p{margin:0;color:var(--dim);max-width:90ch}
+  header code{font-family:var(--mono);color:var(--pur);font-size:13px}
+  .wrap{display:grid;grid-template-columns:1.35fr 1fr;gap:0;min-height:calc(100vh - 92px)}
+  .left{padding:24px 28px;border-right:1px solid var(--line)}
+  .right{padding:24px 28px;display:flex;flex-direction:column;gap:14px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 12px}
+  .node{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;cursor:pointer;transition:.15s;position:relative}
+  .node:hover{border-color:var(--acc)}
+  .node.active{border-color:var(--acc);box-shadow:0 0 0 2px rgba(88,166,255,.25)}
+  .node.lit{border-color:var(--ok);box-shadow:0 0 18px rgba(63,185,80,.35)}
+  .node .t{font-weight:600;font-size:14px}
+  .node .s{color:var(--dim);font-size:12px;font-family:var(--mono);margin-top:3px}
+  .row{display:flex;gap:14px;align-items:stretch;margin:0 0 14px}
+  .row>.node{flex:1}
+  .tier{margin:0 0 10px}
+  .arrow{color:var(--dim);text-align:center;font-size:13px;font-family:var(--mono);margin:0 0 14px}
+  .arrow b{color:var(--acc)}
+  .badge{position:absolute;top:-9px;right:10px;font:11px/1 var(--mono);background:var(--acc);color:#04101f;padding:3px 6px;border-radius:6px}
+  .badge.green{background:var(--ok)}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;margin:2px 0}
+  button{background:var(--acc);color:#04101f;border:0;border-radius:8px;padding:9px 14px;font-weight:600;cursor:pointer;font-size:14px}
+  button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+  button.bad{background:var(--bad);color:#1a0202}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .steps{display:flex;gap:6px;margin:2px 0}
+  .step{flex:1;text-align:center;padding:8px 3px;border:1px solid var(--line);border-radius:8px;font-size:11.5px;color:var(--dim);background:var(--panel)}
+  .step.on{color:var(--ink);border-color:var(--acc);background:#10243f}
+  .step.done{color:var(--ok);border-color:var(--ok)}
+  .step.ready{color:var(--ok);border-color:var(--ok);background:#0f2417}
+  .log{background:#010409;border:1px solid var(--line);border-radius:10px;padding:12px;font-family:var(--mono);font-size:12.5px;flex:1;overflow:auto;min-height:200px;white-space:pre-wrap}
+  .log .ev{color:var(--pur)} .log .k{color:var(--acc)} .log .v{color:var(--ok)}
+  .log .meta{color:var(--dim)} .log .crash{color:var(--bad)} .log .replay{color:var(--warn)}
+  .log .id{color:var(--warn)}
+  .browser{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .browser .bar{background:var(--panel);padding:7px 10px;display:flex;gap:6px;align-items:center;border-bottom:1px solid var(--line)}
+  .dot{width:10px;height:10px;border-radius:50%}
+  .browser .body{padding:14px;min-height:74px;background:#0b0f14}
+  .browser.crashed .body{background:repeating-linear-gradient(45deg,#1a0202,#1a0202 10px,#250404 10px,#250404 20px);color:var(--bad)}
+  .bar-prog{height:6px;background:#21262d;border-radius:4px;overflow:hidden;margin-top:10px}
+  .bar-prog>i{display:block;height:100%;width:0;background:var(--acc);transition:width .5s}
+  .info{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:8px;padding:12px 14px;font-size:13.5px;color:var(--dim)}
+  .info h3{margin:0 0 6px;color:var(--ink);font-size:14px}
+  .info code{font-family:var(--mono);color:var(--pur);font-size:12.5px}
+  .hl{color:var(--ink)}
+  .info pre{margin:10px 0 0;background:#010409;border:1px solid var(--line);border-radius:8px;padding:10px 12px;overflow:auto;font-family:var(--mono);font-size:11.8px;line-height:1.5;color:#c9d1d9;max-height:360px}
+  .info pre .cm{color:var(--dim)} .info pre .kw{color:#ff7b72} .info pre .fn{color:#d2a8ff}
+  .info pre .st{color:#a5d6ff} .info pre .nw{color:var(--ok)}
+  .info .cap{margin-top:10px;font-size:11.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+  .wire{background:#010409;border:1px solid var(--line);border-radius:10px;padding:14px;font-family:var(--mono);font-size:12.5px;line-height:1.7;white-space:pre-wrap}
+  .wire .f{color:var(--acc)} .wire .val{color:var(--ok)} .wire .cm{color:var(--dim)}
+  details{margin-top:16px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+  details>summary{cursor:pointer;padding:12px 14px;font-weight:600;font-size:14px;list-style:none}
+  details>summary::-webkit-details-marker{display:none}
+  details>summary::before{content:"▸ ";color:var(--acc)}
+  details[open]>summary::before{content:"▾ "}
+  details .body{padding:0 14px 14px;color:var(--dim);font-size:13.5px}
+  footer{padding:14px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+  a{color:var(--acc)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Server-Sent Events — how it actually works</h1>
+  <p>One long-lived HTTP response the server never closes. The server <b>pushes</b> text frames down it; the browser's <code>EventSource</code> parses them into events. No polling, no WebSocket upgrade — just <code>Content-Type: text/event-stream</code>. Click any actor for its TypeScript. Then run the upload demo on the right.</p>
+</header>
+
+<div class="wrap">
+  <div class="left">
+    <h2>The actors &amp; the message flow — click a box</h2>
+
+    <div class="tier"><div class="node" data-k="client" id="n-client"><div class="t">🧭 Browser · EventSource</div><div class="s">new EventSource(url) · onmessage · addEventListener("progress")</div></div></div>
+    <div class="arrow">① <b>POST /uploads</b> (multipart) &nbsp;→&nbsp; 202 <span style="color:var(--ok)">{ uploadId }</span> &nbsp; <span style="color:var(--dim)">(ordinary request, returns instantly)</span></div>
+    <div class="tier"><div class="node" data-k="upload" id="n-upload"><div class="t">📤 Upload route</div><div class="s">app.post("/uploads") · save bytes · kick off async work · respond</div><span class="badge">returns in ms</span></div></div>
+
+    <div class="arrow">② <b>GET /uploads/:id/events</b> &nbsp;→&nbsp; the connection that stays open ↓</div>
+    <div class="tier"><div class="node" data-k="conn" id="n-conn"><div class="t">🔌 The SSE connection</div><div class="s">200 · text/event-stream · keep-alive · response never .end()s</div><span class="badge green">held open</span></div></div>
+    <div class="tier"><div class="node" data-k="sse" id="n-sse"><div class="t">📡 SSE route handler</div><div class="s">app.get(".../events") · subscribes to job · res.write(frame) per change</div></div></div>
+
+    <div class="arrow">③ async work emits state changes ↑ which the handler writes as frames</div>
+    <div class="row">
+      <div class="node" data-k="proc" id="n-proc"><div class="t">⚙️ Async processor</div><div class="s">scan → thumbnail → transcode · EventEmitter.emit()</div></div>
+      <div class="arrow" style="align-self:center;margin:0">↔</div>
+      <div class="node" data-k="state" id="n-state"><div class="t">🗂️ Job state</div><div class="s">Map&lt;id, Job&gt; + per-job bus · source of truth</div></div>
+    </div>
+    <div class="arrow">④ each frame: <b>event:</b> progress · <b>id:</b> 3 · <b>data:</b> {…} &nbsp;→&nbsp; browser fires the event</div>
+
+    <div class="info" id="info">
+      <h3>Click an actor</h3>
+      Each box maps to real Express + TypeScript. The shape of SSE: the <span class="hl">upload</span> is a normal
+      request that returns at once; the <span class="hl">events</span> request opens a stream the server keeps writing
+      to; the <span class="hl">processor</span> is what generates the pushes. Below: the exact bytes on the wire.
+    </div>
+
+    <h2 style="margin-top:18px">The wire — what the server literally writes</h2>
+    <div class="wire"><span class="cm">HTTP/1.1 200 OK</span>
+<span class="f">Content-Type:</span> <span class="val">text/event-stream</span>
+<span class="f">Cache-Control:</span> <span class="val">no-cache</span>
+<span class="f">Connection:</span> <span class="val">keep-alive</span>
+<span class="cm">          ← blank line ends headers, body stays open forever ↓</span>
+<span class="f">:</span> <span class="cm">ok — a comment line (starts with ':'), keeps proxies from timing out</span>
+
+<span class="f">event:</span> <span class="val">progress</span>     <span class="cm">← es.addEventListener("progress", …); omit ⇒ "message"</span>
+<span class="f">id:</span> <span class="val">3</span>             <span class="cm">← browser remembers it; resends as Last-Event-ID on reconnect</span>
+<span class="f">data:</span> <span class="val">{"step":"transcode","pct":60}</span>
+<span class="cm">          ← a blank line terminates the event. THE BLANK LINE IS THE DELIMITER.</span>
+<span class="f">retry:</span> <span class="val">3000</span>          <span class="cm">← optional: tell the browser to wait 3s before auto-reconnecting</span></div>
+
+    <details>
+      <summary>Why SSE and not polling or WebSocket?</summary>
+      <div class="body">
+        <p><b>vs polling:</b> polling reopens a request every N seconds and mostly gets "nothing new". SSE is one connection; the server speaks the instant there's news — lower latency, far less overhead.</p>
+        <p><b>vs WebSocket:</b> WebSocket is a protocol upgrade giving you a full-duplex binary socket. SSE is <em>just an HTTP response</em> — it rides existing infra (HTTP/2, proxies, auth cookies, gzip), auto-reconnects for free, and carries a built-in event-id/resume mechanism. The catch: SSE is <span class="hl">server→client only</span> and text only. If the client needs to stream <em>up</em> too, use WebSocket. For "server tells client about progress", SSE is the lazy correct choice.</p>
+        <p><b>The one footgun:</b> over HTTP/1.1 a browser allows only ~6 connections per origin, and each open EventSource burns one. HTTP/2 multiplexes them away. <code>ponytail:</code> fine for one stream per tab; reach for HTTP/2 if you open many.</p>
+      </div>
+    </details>
+  </div>
+
+  <div class="right">
+    <h2>Live demo — upload a file, watch it process</h2>
+    <div class="controls">
+      <button id="btn-upload">⬆ Upload a file</button>
+      <button id="btn-drop" class="bad" disabled>✂ Drop connection</button>
+      <button id="btn-reopen" class="ghost" disabled>↻ Reconnect</button>
+      <button id="btn-reset" class="ghost">Reset</button>
+    </div>
+
+    <div class="steps" id="steps">
+      <div class="step" data-step="received">Received</div>
+      <div class="step" data-step="scan">Virus scan</div>
+      <div class="step" data-step="thumbnail">Thumbnail</div>
+      <div class="step" data-step="transcode">Transcode</div>
+      <div class="step" data-step="ready">Ready</div>
+    </div>
+
+    <div class="browser" id="sim">
+      <div class="bar"><span class="dot" style="background:#f85149"></span><span class="dot" style="background:#d29922"></span><span class="dot" style="background:#3fb950"></span><span style="color:var(--dim);font-family:var(--mono);font-size:12px">app://uploads/holiday.mov</span></div>
+      <div class="body" id="sim-body">Idle. Hit <b>Upload</b>.
+        <div class="bar-prog"><i></i></div>
+      </div>
+    </div>
+
+    <h2 style="margin-top:6px">SSE frames (server → browser)</h2>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<footer>Self-contained simulation — no backend. Timings are faked; the <b>frame format</b>, the <code>event/id/data</code> shapes, and the <code>Last-Event-ID</code> resume-on-reconnect behaviour are exactly what a real Express SSE endpoint emits.</footer>
+
+<script>
+// syntax-highlight helpers: K=keyword F=function S=string C=comment N=new/important
+function K(s){return '<span class="kw">'+s+'</span>'}
+function F(s){return '<span class="fn">'+s+'</span>'}
+function S(s){return '<span class="st">'+s+'</span>'}
+function C(s){return '<span class="cm">'+s+'</span>'}
+function N(s){return '<span class="nw">'+s+'</span>'}
+
+const INFO = {
+  client:{h:"🧭 Browser · EventSource",
+    b:"<code>EventSource</code> opens the stream with a plain GET and parses incoming frames into events. Named frames (<code>event: progress</code>) need <code>addEventListener</code>; unnamed ones fire <code>onmessage</code>. <span class='hl'>It auto-reconnects</span> on drop and replays the last id — you write zero reconnection logic.",
+    cap:"client — upload + subscribe (TypeScript, browser)",
+    c:`${C('// 1) ordinary upload — returns a job id immediately')}
+${K('const')} form = ${K('new')} ${F('FormData')}();
+form.${F('append')}(${S('"file"')}, fileInput.files[0]);
+${K('const')} { uploadId } = ${K('await')} ${F('fetch')}(${S('"/uploads"')}, {
+  method: ${S('"POST"')}, body: form,
+}).${F('then')}(r => r.${F('json')}());
+
+${C('// 2) subscribe to that job\'s progress stream')}
+${K('const')} es = ${K('new')} ${F('EventSource')}(${S('`/uploads/${uploadId}/events`')});
+
+${C('// named events → addEventListener; e.data is always a string')}
+es.${F('addEventListener')}(${S('"progress"')}, (e) => {
+  ${K('const')} { step, pct } = ${F('JSON.parse')}((e ${K('as')} MessageEvent).data);
+  ${F('renderProgress')}(step, pct);
+});
+es.${F('addEventListener')}(${S('"ready"')}, (e) => {
+  ${F('showDone')}(${F('JSON.parse')}((e ${K('as')} MessageEvent).data));
+  es.${F('close')}();                 ${C('// terminal — stop the stream')}
+});
+
+${C('// the browser reconnects on its own; this just logs it')}
+es.${F('onerror')} = () => ${F('console')}.${F('warn')}(${S('"stream dropped, auto-reconnecting…"')});`},
+
+  upload:{h:"📤 Upload route",
+    b:"A normal POST. It does only the fast part — persist the bytes, register a job, <span class='hl'>start the async work without awaiting it</span> — then responds <code>202 { uploadId }</code>. The slow processing happens after the response is sent.",
+    cap:"server — routes/uploads.ts (Express + multer)",
+    c:`${K('import')} { Router } ${K('from')} ${S('"express"')};
+${K('import')} multer ${K('from')} ${S('"multer"')};
+${K('import')} { randomUUID } ${K('from')} ${S('"node:crypto"')};
+${K('import')} { jobs, processUpload } ${K('from')} ${S('"./processor"')};
+
+${K('export const')} uploads = ${F('Router')}();
+${K('const')} upload = ${F('multer')}({ dest: ${S('"/tmp/uploads"')} });
+
+uploads.${F('post')}(${S('"/uploads"')}, upload.${F('single')}(${S('"file"')}), (req, res) => {
+  ${K('const')} id = ${F('randomUUID')}();
+  jobs.${F('set')}(id, { id, step: ${S('"received"')}, pct: 0, lastId: 0 });
+
+  ${N('// fire-and-forget: do NOT await — let the response return now')}
+  ${F('processUpload')}(id, req.file!.path).${F('catch')}(console.error);
+
+  res.${F('status')}(202).${F('json')}({ uploadId: id });   ${C('// instant')}
+});`},
+
+  conn:{h:"🔌 The SSE connection",
+    b:"This is the whole trick. You write the <code>text/event-stream</code> headers, <code>flushHeaders()</code>, and then <span class='hl'>never call <code>res.end()</code></span> until you're done. The response body is an open pipe you keep writing UTF-8 frames into. Disabling buffering (Nagle, gzip, proxy) matters so frames arrive immediately.",
+    cap:"server — the headers that open the stream",
+    c:`${K('function')} ${F('openStream')}(res: Response) {
+  res.${F('writeHead')}(200, {
+    ${S('"Content-Type"')}:  ${S('"text/event-stream"')},   ${N('// THIS makes it SSE')}
+    ${S('"Cache-Control"')}: ${S('"no-cache, no-transform"')}, ${C('// no proxy buffering')}
+    ${S('"Connection"')}:    ${S('"keep-alive"')},
+    ${S('"X-Accel-Buffering"')}: ${S('"no"')},             ${C('// nginx: flush at once')}
+  });
+  res.${F('flushHeaders')}();          ${C('// send headers before any data')}
+  res.${F('write')}(${S('":ok\\n\\n"')});        ${C('// comment frame opens the pipe')}
+  ${C('// ...and we never res.end() until the job is terminal')}
+}
+
+${C('// a tiny helper: one well-formed SSE frame')}
+${K('function')} ${F('frame')}(res: Response, event: string, id: number, data: unknown) {
+  res.${F('write')}(${S('`event: ${event}\\n`')});
+  res.${F('write')}(${S('`id: ${id}\\n`')});
+  res.${F('write')}(${S('`data: ${JSON.stringify(data)}\\n\\n`')});  ${N('// blank line = end of frame')}
+}`},
+
+  sse:{h:"📡 SSE route handler",
+    b:"The GET that holds the connection. On connect it <span class='hl'>replays the current state</span> (so a fresh or reconnecting client is immediately correct), honours <code>Last-Event-ID</code> to resume, subscribes to the job's event bus, and writes a frame on every change. A heartbeat comment keeps idle connections alive. Cleanup on <code>req close</code> is mandatory or you leak listeners.",
+    cap:"server — routes/events.ts (the push endpoint)",
+    c:`uploads.${F('get')}(${S('"/uploads/:id/events"')}, (req, res) => {
+  ${K('const')} job = jobs.${F('get')}(req.params.id);
+  ${K('if')} (!job) ${K('return')} res.${F('sendStatus')}(404);
+
+  ${F('openStream')}(res);
+
+  ${C('// resume: the browser sends the last id it saw on reconnect')}
+  ${K('const')} lastSeen = ${F('Number')}(req.headers[${S('"last-event-id"')}] ?? 0);
+
+  ${N('// 1) replay current state right away → client is instantly in sync')}
+  ${K('if')} (job.lastId > lastSeen) ${F('frame')}(res, job.step === ${S('"ready"')} ? ${S('"ready"')} : ${S('"progress"')}, job.lastId, job);
+
+  ${C('// 2) push every future change from this job\'s bus')}
+  ${K('const')} onUpdate = (j: Job) =>
+    ${F('frame')}(res, j.step === ${S('"ready"')} ? ${S('"ready"')} : ${S('"progress"')}, j.lastId, j);
+  bus.${F('on')}(job.id, onUpdate);
+
+  ${C('// 3) heartbeat so proxies / load balancers don\'t kill an idle stream')}
+  ${K('const')} hb = ${F('setInterval')}(() => res.${F('write')}(${S('":hb\\n\\n"')}), 15000);
+
+  ${C('// 4) ALWAYS clean up when the client goes away')}
+  req.${F('on')}(${S('"close"')}, () => {
+    ${F('clearInterval')}(hb);
+    bus.${F('off')}(job.id, onUpdate);
+  });
+});`},
+
+  proc:{h:"⚙️ Async processor",
+    b:"The work that produces the pushes. It mutates the job's state, bumps the monotonic <code>lastId</code>, and <code>emit</code>s on the per-job bus. <span class='hl'>It knows nothing about HTTP or SSE</span> — the events route is just a listener. That decoupling is why a dropped browser changes nothing server-side.",
+    cap:"server — processor.ts (the source of the pushes)",
+    c:`${K('import')} { EventEmitter } ${K('from')} ${S('"node:events"')};
+
+${K('export type')} Job = { id: string; step: string; pct: number; lastId: number };
+${K('export const')} jobs = ${K('new')} ${F('Map')}<string, Job>();
+${K('export const')} bus  = ${K('new')} ${F('EventEmitter')}();
+
+${K('async function')} ${F('set')}(id: string, step: string, pct: number) {
+  ${K('const')} job = jobs.${F('get')}(id)!;
+  job.step = step; job.pct = pct; job.lastId++;   ${N('// id increments per change')}
+  bus.${F('emit')}(id, job);                            ${N('// → every open stream gets a frame')}
+}
+
+${K('export async function')} ${F('processUpload')}(id: string, path: string) {
+  ${K('await')} ${F('scanForViruses')}(path);      ${F('set')}(id, ${S('"scan"')}, 25);
+  ${K('await')} ${F('makeThumbnail')}(path);       ${F('set')}(id, ${S('"thumbnail"')}, 50);
+  ${K('await')} ${F('transcode')}(path);           ${F('set')}(id, ${S('"transcode"')}, 80);
+  ${K('await')} ${F('store')}(id, path);           ${F('set')}(id, ${S('"ready"')}, 100);
+}`},
+
+  state:{h:"🗂️ Job state",
+    b:"The single source of truth: a <code>Map&lt;id, Job&gt;</code> plus the <code>EventEmitter</code> bus. The SSE handler reads from it (replay) and listens to it (live). <span class='hl'>Because state lives here, not in the connection,</span> the client can drop and reconnect and the server just replays. <code>ponytail:</code> an in-memory Map is fine for one process; swap for Redis pub/sub if you run multiple instances.",
+    cap:"server — state model (in processor.ts)",
+    c:`${C('// state is independent of any connection:')}
+${C('//   jobs  — current snapshot per upload  (for replay on connect)')}
+${C('//   bus   — change notifications          (for live push)')}
+${C('//   lastId — monotonic per job            (for resume via Last-Event-ID)')}
+
+${K('export const')} jobs = ${K('new')} ${F('Map')}<string, Job>();
+${K('export const')} bus  = ${K('new')} ${F('EventEmitter')}();
+
+${C('// multi-instance? replace `bus` with Redis pub/sub — the handler is unchanged:')}
+${C('//   sub.subscribe(id); sub.on("message", (_, payload) => frame(res, ...))')}`}
+};
+
+const nodes=[...document.querySelectorAll('.node')];
+const info=document.getElementById('info');
+function render(d){
+  info.innerHTML='<h3>'+d.h+'</h3>'+d.b+
+    (d.cap?'<div class="cap">'+d.cap+'</div>':'')+
+    (d.c?'<pre>'+d.c+'</pre>':'');
+}
+nodes.forEach(n=>n.addEventListener('click',()=>{
+  nodes.forEach(x=>x.classList.remove('active'));n.classList.add('active');
+  render(INFO[n.dataset.k]);
+}));
+
+// ---- live demo --------------------------------------------------------
+const log=document.getElementById('log'), steps=document.getElementById('steps');
+const simBody=document.getElementById('sim-body'), sim=document.getElementById('sim');
+const bUp=document.getElementById('btn-upload'),bDrop=document.getElementById('btn-drop'),
+      bRe=document.getElementById('btn-reopen'),bRs=document.getElementById('btn-reset');
+
+const order=['received','scan','thumbnail','transcode','ready'];
+const PCT={received:5,scan:25,thumbnail:50,transcode:80,ready:100};
+const LABEL={received:'📥 Received — bytes saved, job queued.',scan:'🛡️ Virus scanning…',
+             thumbnail:'🖼️ Generating thumbnail…',transcode:'🎞️ Transcoding…',ready:'✅ Ready — file processed.'};
+let jobId=null, store={}, timers=[], sseOpen=false, eventId=0;
+
+const t=(ms,fn)=>{const id=setTimeout(fn,ms);timers.push(id);};
+function clearTimers(){timers.forEach(clearTimeout);timers=[];}
+function line(html){const d=document.createElement('div');d.innerHTML=html;log.appendChild(d);log.scrollTop=log.scrollHeight;}
+function litNode(k){nodes.forEach(x=>x.classList.remove('lit'));const n=nodes.find(x=>x.dataset.k===k);if(n)n.classList.add('lit');}
+function paintSteps(step){
+  const cur=order.indexOf(step);
+  [...steps.children].forEach(c=>{c.className='step';
+    const i=order.indexOf(c.dataset.step);
+    if(step==='ready'&&c.dataset.step==='ready'){c.classList.add('ready');}
+    else if(i<cur){c.classList.add('done');}
+    else if(i===cur){c.classList.add('on');}
+  });
+}
+
+// emit one SSE frame exactly as the server would write it
+function emit(step){
+  const evName=step==='ready'?'ready':'progress';
+  litNode(step==='ready'?'state':'proc');
+  paintSteps(step);
+  line('<span class="ev">event: </span>'+evName+'\n'+
+       '<span class="meta">id: </span><span class="id">'+(++eventId)+'</span>\n'+
+       '<span class="meta">data: </span>{ <span class="k">"step"</span>: <span class="v">"'+step+'"</span>, <span class="k">"pct"</span>: '+PCT[step]+' }\n');
+  simBody.innerHTML=LABEL[step]+'<div class="bar-prog"><i style="width:'+PCT[step]+'%"></i></div>';
+  store.idAt=eventId;
+}
+
+// the SERVER-SIDE progression — runs whether or not the browser is connected
+function schedule(fromStep){
+  const plan=[['received',300],['scan',1500],['thumbnail',2800],['transcode',4200],['ready',5600]];
+  const start=order.indexOf(fromStep);
+  plan.forEach(([step,ms])=>{
+    if(order.indexOf(step)<start) return;          // already past on the server
+    t(ms,()=>{ store.step=step; if(step==='ready'){store.terminal=true;bDrop.disabled=true;}
+               if(sseOpen) emit(step); });
+  });
+}
+
+bUp.addEventListener('click',()=>{
+  reset(false);
+  jobId=Math.floor(1000+Math.random()*9000); eventId=0;
+  store={step:'received',terminal:false};
+  litNode('upload');
+  line('<span class="meta">POST /uploads (multipart) → </span><span class="v">202</span> { uploadId: '+jobId+' }');
+  line('<span class="meta">GET /uploads/'+jobId+'/events  → 200 text/event-stream (open)</span>');
+  line('<span class="meta">:ok</span>\n');
+  sseOpen=true; bUp.disabled=true; bDrop.disabled=false; bRe.disabled=true;
+  schedule('received');
+});
+
+bDrop.addEventListener('click',()=>{
+  // connection dies — but the server-side job keeps processing
+  sseOpen=false; sim.classList.add('crashed');
+  simBody.innerHTML='✂ <b>Connection dropped.</b> EventSource closed.';
+  line('\n<span class="crash">✗ connection dropped (network blip / tab backgrounded)</span>');
+  line('<span class="crash">  server keeps processing; frames pile up unsent</span>\n');
+  bDrop.disabled=true; bRe.disabled=false;
+});
+
+bRe.addEventListener('click',()=>{
+  sim.classList.remove('crashed');
+  line('<span class="replay">↻ EventSource auto-reconnects</span>');
+  line('<span class="replay">  → GET /uploads/'+jobId+'/events</span>');
+  line('<span class="replay">  → Last-Event-ID: '+(store.idAt||0)+'   (browser resends the last id it saw)</span>');
+  line('<span class="replay">  server replays current state immediately:</span>');
+  sseOpen=true; bRe.disabled=true;
+  emit(store.step);                                 // server replays whatever state is current NOW
+  if(!store.terminal){ schedule(store.step); bDrop.disabled=false; }
+});
+
+function reset(full){
+  clearTimers(); sseOpen=false; sim.classList.remove('crashed');
+  log.innerHTML=''; paintSteps('idle'); litNode('');
+  simBody.innerHTML='Idle. Hit <b>Upload</b>.<div class="bar-prog"><i></i></div>';
+  bUp.disabled=false; bDrop.disabled=true; bRe.disabled=true;
+  if(full){jobId=null; store={}; eventId=0;}
+}
+bRs.addEventListener('click',()=>reset(true));
+reset(true);
+</script>
+</body>
+</html>
