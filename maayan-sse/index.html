@@ -65,10 +65,11 @@
   .note.lit{border-color:var(--warn);border-style:solid;color:var(--ink)}
   .note b{color:var(--pur)}
   .note.left{margin:18px 54% 0 0}
-  .msg.dlit{border-color:var(--ok)!important;box-shadow:0 0 14px rgba(63,185,80,.55)}
-  .msg.dlit .lbl{color:var(--ink)}
-  .msg.dlit::after{border-left-color:var(--ok)!important;border-right-color:var(--ok)!important}
-  .note.dlit{border-color:var(--ok);border-style:solid;color:var(--ink)}
+  @keyframes dlitPulse{0%{box-shadow:0 0 0 0 rgba(255,211,61,.6)}70%{box-shadow:0 0 0 10px rgba(255,211,61,0)}100%{box-shadow:0 0 0 0 rgba(255,211,61,0)}}
+  .msg.dlit{border-color:#ffd33d!important;border-top-width:3px}
+  .msg.dlit .lbl{color:#1a1400;background:#ffd33d;font-weight:700;border-radius:7px;padding:2px 9px;animation:dlitPulse 1.1s ease-out infinite}
+  .msg.dlit::after{border-left-color:#ffd33d!important;border-right-color:#ffd33d!important}
+  .note.dlit{border-color:#ffd33d;border-style:solid;background:rgba(255,211,61,.13);color:var(--ink);animation:dlitPulse 1.1s ease-out infinite}
   .controls{display:flex;gap:10px;flex-wrap:wrap;margin:2px 0}
   button{background:var(--acc);color:#04101f;border:0;border-radius:8px;padding:9px 14px;font-weight:600;cursor:pointer;font-size:14px}
   button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
