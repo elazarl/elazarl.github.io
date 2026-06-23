@@ -33,6 +33,42 @@
   .arrow b{color:var(--acc)}
   .badge{position:absolute;top:-9px;right:10px;font:11px/1 var(--mono);background:var(--acc);color:#04101f;padding:3px 6px;border-radius:6px}
   .badge.green{background:var(--ok)}
+  /* ── sequence diagram ── */
+  .seq{position:relative;padding:0 0 6px}
+  .heads{display:grid;grid-template-columns:1fr 1fr;gap:0;margin-bottom:4px;position:relative;z-index:2}
+  .head{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 6px;text-align:center;margin:0 14%}
+  .head .t{font-weight:700;font-size:15px}
+  .head .s{color:var(--dim);font-size:11px;font-family:var(--mono);margin-top:2px}
+  .lifelines{position:absolute;top:54px;bottom:0;left:0;right:0;z-index:0;pointer-events:none}
+  .lifelines::before,.lifelines::after{content:"";position:absolute;top:0;bottom:0;width:2px;background:repeating-linear-gradient(var(--line) 0 6px,transparent 6px 12px)}
+  .lifelines::before{left:25%} .lifelines::after{left:75%}
+  .phase{position:relative;z-index:1;margin:4px 0}
+  .plabel{text-align:center;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.09em;margin:14px 0 6px}
+  .plabel b{color:var(--ink)}
+  .msg{position:relative;height:0;border-top:2px solid var(--acc);margin:34px 25% 0;cursor:pointer;transition:.12s}
+  .msg .lbl{position:absolute;left:50%;transform:translateX(-50%);top:-20px;white-space:nowrap;font:10px/1.3 var(--mono);color:var(--acc);background:var(--bg);padding:0 5px;text-align:center}
+  .msg::after{content:"";position:absolute;top:-6px;border:7px solid transparent}
+  .msg.out::after{right:-2px;border-left-color:var(--acc)}            /* browser → server */
+  .msg.in{border-top-style:solid;border-color:var(--ok)}             /* server → browser */
+  .msg.in .lbl{color:var(--ok)}
+  .msg.in::after{left:-2px;border-right-color:var(--ok)}
+  .msg.dashed{border-top-style:dashed}
+  .msg:hover{filter:brightness(1.35)}
+  .msg.active{box-shadow:0 2px 0 rgba(88,166,255,.5)}
+  .msg.active.in{box-shadow:0 2px 0 rgba(63,185,80,.5)}
+  .msg.lit{border-color:var(--warn)!important;box-shadow:0 0 12px rgba(210,153,34,.5)}
+  .msg.lit .lbl{color:var(--warn)}
+  .msg.lit::after{border-left-color:var(--warn)!important;border-right-color:var(--warn)!important}
+  .note{position:relative;z-index:1;cursor:pointer;width:42%;margin:18px 0 0 54%;background:var(--panel);border:1px dashed var(--line);border-radius:8px;padding:7px 10px;font:11.5px/1.35 var(--mono);color:var(--dim);transition:.12s}
+  .note:hover{border-color:var(--pur);color:var(--ink)}
+  .note.active{border-color:var(--pur);border-style:solid}
+  .note.lit{border-color:var(--warn);border-style:solid;color:var(--ink)}
+  .note b{color:var(--pur)}
+  .note.left{margin:18px 54% 0 0}
+  .msg.dlit{border-color:var(--ok)!important;box-shadow:0 0 14px rgba(63,185,80,.55)}
+  .msg.dlit .lbl{color:var(--ink)}
+  .msg.dlit::after{border-left-color:var(--ok)!important;border-right-color:var(--ok)!important}
+  .note.dlit{border-color:var(--ok);border-style:solid;color:var(--ink)}
   .controls{display:flex;gap:10px;flex-wrap:wrap;margin:2px 0}
   button{background:var(--acc);color:#04101f;border:0;border-radius:8px;padding:9px 14px;font-weight:600;cursor:pointer;font-size:14px}
   button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
@@ -77,34 +113,61 @@
 <body>
 <header>
   <h1>Server-Sent Events — how it actually works</h1>
-  <p>One long-lived HTTP response the server never closes. The server <b>pushes</b> text frames down it; the browser's <code>EventSource</code> parses them into events. No polling, no WebSocket upgrade — just <code>Content-Type: text/event-stream</code>. Click any actor for its TypeScript. Then run the upload demo on the right.</p>
+  <p>One long-lived HTTP response the server never closes. The server <b>pushes</b> text frames down it; the browser's <code>EventSource</code> parses them into events. No polling, no WebSocket upgrade — just <code>Content-Type: text/event-stream</code>. Click any message arrow below for the TypeScript that sends or handles it. Then run the upload demo on the right.</p>
 </header>
 
 <div class="wrap">
   <div class="left">
-    <h2>The actors &amp; the message flow — click a box</h2>
+    <h2>The message flow — who sends what to whom · click any arrow</h2>
 
-    <div class="tier"><div class="node" data-k="client" id="n-client"><div class="t">🧭 Browser · EventSource</div><div class="s">new EventSource(url) · onmessage · addEventListener("progress")</div></div></div>
-    <div class="arrow">① <b>POST /uploads</b> (multipart) &nbsp;→&nbsp; 202 <span style="color:var(--ok)">{ uploadId }</span> &nbsp; <span style="color:var(--dim)">(ordinary request, returns instantly)</span></div>
-    <div class="tier"><div class="node" data-k="upload" id="n-upload"><div class="t">📤 Upload route</div><div class="s">app.post("/uploads") · save bytes · kick off async work · respond</div><span class="badge">returns in ms</span></div></div>
+    <div class="seq">
+      <div class="heads">
+        <div class="head"><div class="t">🧭 Browser</div><div class="s">EventSource</div></div>
+        <div class="head"><div class="t">🖥️ Server</div><div class="s">Express</div></div>
+      </div>
+      <div class="lifelines"></div>
 
-    <div class="arrow">② <b>GET /uploads/:id/events</b> &nbsp;→&nbsp; the connection that stays open ↓</div>
-    <div class="tier"><div class="node" data-k="conn" id="n-conn"><div class="t">🔌 The SSE connection</div><div class="s">200 · text/event-stream · keep-alive · response never .end()s</div><span class="badge green">held open</span></div></div>
-    <div class="tier"><div class="node" data-k="sse" id="n-sse"><div class="t">📡 SSE route handler</div><div class="s">app.get(".../events") · subscribes to job · res.write(frame) per change</div></div></div>
+      <div class="phase">
+        <div class="plabel">Phase 1 — <b>upload</b> (an ordinary request)</div>
+        <div class="msg out" data-k="upload"><span class="lbl">POST /uploads&nbsp;&nbsp;(multipart: the file)</span></div>
+        <div class="msg in"  data-k="upload"><span class="lbl">202 { uploadId }&nbsp;&nbsp;— returns instantly</span></div>
+        <div class="note" data-k="proc"><b>server:</b> starts async work in background,<br>does <b>not</b> wait for it</div>
+      </div>
 
-    <div class="arrow">③ async work emits state changes ↑ which the handler writes as frames</div>
-    <div class="row">
-      <div class="node" data-k="proc" id="n-proc"><div class="t">⚙️ Async processor</div><div class="s">scan → thumbnail → transcode · EventEmitter.emit()</div></div>
-      <div class="arrow" style="align-self:center;margin:0">↔</div>
-      <div class="node" data-k="state" id="n-state"><div class="t">🗂️ Job state</div><div class="s">Map&lt;id, Job&gt; + per-job bus · source of truth</div></div>
+      <div class="phase">
+        <div class="plabel">Phase 2 — <b>subscribe</b> (open the stream)</div>
+        <div class="msg out" data-k="client"><span class="lbl">GET /uploads/:id/events&nbsp;&nbsp;(EventSource opens)</span></div>
+        <div class="msg in"  data-k="conn"><span class="lbl">200 · Content-Type: text/event-stream</span></div>
+        <div class="note" data-k="conn"><b>connection stays open</b> — server never<br>calls res.end(); replays current state first</div>
+      </div>
+
+      <div class="phase">
+        <div class="plabel">Phase 3 — <b>server push</b> (repeats per state change)</div>
+        <div class="msg in" data-k="sse"><span class="lbl">event: progress · id: 1 · data:{"step":"scan"}</span></div>
+        <div class="msg in" data-k="sse"><span class="lbl">event: progress · id: 2 · data:{"step":"thumbnail"}</span></div>
+        <div class="msg in" data-k="sse"><span class="lbl">event: progress · id: 3 · data:{"step":"transcode"}</span></div>
+        <div class="note" data-k="proc"><b>server:</b> each await done → bus.emit() →<br>handler writes one frame down the pipe</div>
+      </div>
+
+      <div class="phase">
+        <div class="plabel">Phase 4 — <b>done</b></div>
+        <div class="msg in" data-k="sse"><span class="lbl">event: ready · id: 4 · data:{"pct":100}</span></div>
+        <div class="msg out" data-k="client"><span class="lbl">es.close()&nbsp;&nbsp;— browser ends the stream</span></div>
+      </div>
+
+      <div class="phase">
+        <div class="plabel">If the connection drops — <b>auto-reconnect &amp; resume</b></div>
+        <div class="msg out lit" data-k="sse"><span class="lbl">GET …/events&nbsp;&nbsp;Last-Event-ID: 3</span></div>
+        <div class="msg in lit" data-k="sse"><span class="lbl">replays from id 4 onward — nothing lost</span></div>
+      </div>
     </div>
-    <div class="arrow">④ each frame: <b>event:</b> progress · <b>id:</b> 3 · <b>data:</b> {…} &nbsp;→&nbsp; browser fires the event</div>
 
     <div class="info" id="info">
-      <h3>Click an actor</h3>
-      Each box maps to real Express + TypeScript. The shape of SSE: the <span class="hl">upload</span> is a normal
-      request that returns at once; the <span class="hl">events</span> request opens a stream the server keeps writing
-      to; the <span class="hl">processor</span> is what generates the pushes. Below: the exact bytes on the wire.
+      <h3>Click a message arrow</h3>
+      Each arrow maps to real Express + TypeScript — blue is <span class="hl">browser → server</span>, green is
+      <span class="hl">server → browser</span> (the push), amber is the reconnect. The shape of SSE: the
+      <span class="hl">upload</span> returns at once; the <span class="hl">events</span> request opens a stream the
+      server keeps writing to; the <span class="hl">processor</span> generates the pushes. Below: the exact bytes on the wire.
     </div>
 
     <h2 style="margin-top:18px">The wire — what the server literally writes</h2>
@@ -307,15 +370,15 @@ ${C('// multi-instance? replace `bus` with Redis pub/sub — the handler is unch
 ${C('//   sub.subscribe(id); sub.on("message", (_, payload) => frame(res, ...))')}`}
 };
 
-const nodes=[...document.querySelectorAll('.node')];
+const clickable=[...document.querySelectorAll('.seq [data-k]')];
 const info=document.getElementById('info');
 function render(d){
   info.innerHTML='<h3>'+d.h+'</h3>'+d.b+
     (d.cap?'<div class="cap">'+d.cap+'</div>':'')+
     (d.c?'<pre>'+d.c+'</pre>':'');
 }
-nodes.forEach(n=>n.addEventListener('click',()=>{
-  nodes.forEach(x=>x.classList.remove('active'));n.classList.add('active');
+clickable.forEach(n=>n.addEventListener('click',()=>{
+  clickable.forEach(x=>x.classList.remove('active'));n.classList.add('active');
   render(INFO[n.dataset.k]);
 }));
 
@@ -334,7 +397,7 @@ let jobId=null, store={}, timers=[], sseOpen=false, eventId=0;
 const t=(ms,fn)=>{const id=setTimeout(fn,ms);timers.push(id);};
 function clearTimers(){timers.forEach(clearTimeout);timers=[];}
 function line(html){const d=document.createElement('div');d.innerHTML=html;log.appendChild(d);log.scrollTop=log.scrollHeight;}
-function litNode(k){nodes.forEach(x=>x.classList.remove('lit'));const n=nodes.find(x=>x.dataset.k===k);if(n)n.classList.add('lit');}
+function litNode(k){clickable.forEach(x=>{x.classList.toggle('dlit',!!k&&x.dataset.k===k);});}
 function paintSteps(step){
   const cur=order.indexOf(step);
   [...steps.children].forEach(c=>{c.className='step';
@@ -348,7 +411,7 @@ function paintSteps(step){
 // emit one SSE frame exactly as the server would write it
 function emit(step){
   const evName=step==='ready'?'ready':'progress';
-  litNode(step==='ready'?'state':'proc');
+  litNode('sse');   // light the server→browser frame arrows in the diagram
   paintSteps(step);
   line('<span class="ev">event: </span>'+evName+'\n'+
        '<span class="meta">id: </span><span class="id">'+(++eventId)+'</span>\n'+
