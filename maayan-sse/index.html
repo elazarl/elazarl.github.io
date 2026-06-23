@@ -108,6 +108,33 @@
   details .body{padding:0 14px 14px;color:var(--dim);font-size:13.5px}
   footer{padding:14px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
   a{color:var(--acc)}
+  /* ── phones ── */
+  @media (max-width:760px){
+    body{font-size:14px}
+    header{padding:16px}
+    h1{font-size:18px}
+    .wrap{grid-template-columns:1fr;min-height:0}
+    .left{border-right:0;border-bottom:1px solid var(--line);padding:16px}
+    .right{padding:16px}
+    .head{margin:0 4%}
+    .lifelines::before{left:20%} .lifelines::after{left:80%}
+    .msg{margin:30px 20% 0}
+    .msg .lbl{font-size:8.7px;padding:0 3px}
+    .note{font-size:10px;width:46%;margin-left:50%}
+    .note.left{margin:18px 50% 0 0}
+    .plabel{font-size:10px}
+    .wire{font-size:10.5px;padding:10px}
+    .info pre{font-size:10.5px}
+    .log{font-size:11px;min-height:160px}
+    .steps{flex-wrap:wrap}
+    .step{flex:1 1 28%;font-size:10.5px}
+    footer{padding:12px 16px}
+  }
+  @media (max-width:380px){
+    .msg .lbl{font-size:7.8px}
+    .lifelines::before{left:16%} .lifelines::after{left:84%}
+    .msg{margin:30px 16% 0}
+  }
 </style>
 </head>
 <body>
@@ -129,30 +156,30 @@
 
       <div class="phase">
         <div class="plabel">Phase 1 — <b>upload</b> (an ordinary request)</div>
-        <div class="msg out" data-k="upload"><span class="lbl">POST /uploads&nbsp;&nbsp;(multipart: the file)</span></div>
-        <div class="msg in"  data-k="upload"><span class="lbl">202 { uploadId }&nbsp;&nbsp;— returns instantly</span></div>
-        <div class="note" data-k="proc"><b>server:</b> starts async work in background,<br>does <b>not</b> wait for it</div>
+        <div class="msg out" data-k="upload" data-step="post"><span class="lbl">POST /uploads&nbsp;&nbsp;(multipart: the file)</span></div>
+        <div class="msg in"  data-k="upload" data-step="received"><span class="lbl">202 { uploadId }&nbsp;&nbsp;— returns instantly</span></div>
+        <div class="note" data-k="proc" data-step="received"><b>server:</b> starts async work in background,<br>does <b>not</b> wait for it</div>
       </div>
 
       <div class="phase">
         <div class="plabel">Phase 2 — <b>subscribe</b> (open the stream)</div>
-        <div class="msg out" data-k="client"><span class="lbl">GET /uploads/:id/events&nbsp;&nbsp;(EventSource opens)</span></div>
-        <div class="msg in"  data-k="conn"><span class="lbl">200 · Content-Type: text/event-stream</span></div>
-        <div class="note" data-k="conn"><b>connection stays open</b> — server never<br>calls res.end(); replays current state first</div>
+        <div class="msg out" data-k="client" data-step="open"><span class="lbl">GET /uploads/:id/events&nbsp;&nbsp;(EventSource opens)</span></div>
+        <div class="msg in"  data-k="conn" data-step="open"><span class="lbl">200 · Content-Type: text/event-stream</span></div>
+        <div class="note" data-k="conn" data-step="open"><b>connection stays open</b> — server never<br>calls res.end(); replays current state first</div>
       </div>
 
       <div class="phase">
         <div class="plabel">Phase 3 — <b>server push</b> (repeats per state change)</div>
-        <div class="msg in" data-k="sse"><span class="lbl">event: progress · id: 1 · data:{"step":"scan"}</span></div>
-        <div class="msg in" data-k="sse"><span class="lbl">event: progress · id: 2 · data:{"step":"thumbnail"}</span></div>
-        <div class="msg in" data-k="sse"><span class="lbl">event: progress · id: 3 · data:{"step":"transcode"}</span></div>
+        <div class="msg in" data-k="sse" data-step="scan"><span class="lbl">event: progress · id: 1 · data:{"step":"scan"}</span></div>
+        <div class="msg in" data-k="sse" data-step="thumbnail"><span class="lbl">event: progress · id: 2 · data:{"step":"thumbnail"}</span></div>
+        <div class="msg in" data-k="sse" data-step="transcode"><span class="lbl">event: progress · id: 3 · data:{"step":"transcode"}</span></div>
         <div class="note" data-k="proc"><b>server:</b> each await done → bus.emit() →<br>handler writes one frame down the pipe</div>
       </div>
 
       <div class="phase">
         <div class="plabel">Phase 4 — <b>done</b></div>
-        <div class="msg in" data-k="sse"><span class="lbl">event: ready · id: 4 · data:{"pct":100}</span></div>
-        <div class="msg out" data-k="client"><span class="lbl">es.close()&nbsp;&nbsp;— browser ends the stream</span></div>
+        <div class="msg in" data-k="sse" data-step="ready"><span class="lbl">event: ready · id: 4 · data:{"pct":100}</span></div>
+        <div class="msg out" data-k="client" data-step="close"><span class="lbl">es.close()&nbsp;&nbsp;— browser ends the stream</span></div>
       </div>
 
       <div class="phase">
@@ -392,12 +419,13 @@ const order=['received','scan','thumbnail','transcode','ready'];
 const PCT={received:5,scan:25,thumbnail:50,transcode:80,ready:100};
 const LABEL={received:'📥 Received — bytes saved, job queued.',scan:'🛡️ Virus scanning…',
              thumbnail:'🖼️ Generating thumbnail…',transcode:'🎞️ Transcoding…',ready:'✅ Ready — file processed.'};
-let jobId=null, store={}, timers=[], sseOpen=false, eventId=0;
+let jobId=null, store={}, timers=[], sseOpen=false;
 
 const t=(ms,fn)=>{const id=setTimeout(fn,ms);timers.push(id);};
 function clearTimers(){timers.forEach(clearTimeout);timers=[];}
 function line(html){const d=document.createElement('div');d.innerHTML=html;log.appendChild(d);log.scrollTop=log.scrollHeight;}
-function litNode(k){clickable.forEach(x=>{x.classList.toggle('dlit',!!k&&x.dataset.k===k);});}
+const flowEls=[...document.querySelectorAll('.seq [data-step]')];
+function lit(s){flowEls.forEach(x=>x.classList.toggle('dlit',!!s&&x.dataset.step===s));}
 function paintSteps(step){
   const cur=order.indexOf(step);
   [...steps.children].forEach(c=>{c.className='step';
@@ -408,44 +436,58 @@ function paintSteps(step){
   });
 }
 
+// processing steps that the server pushes as SSE frames (id = index+1)
+const PROC=['scan','thumbnail','transcode','ready'];
+function setSim(txt,pct){simBody.innerHTML=txt+'<div class="bar-prog"><i style="width:'+(pct||0)+'%"></i></div>';}
+
 // emit one SSE frame exactly as the server would write it
 function emit(step){
-  const evName=step==='ready'?'ready':'progress';
-  litNode('sse');   // light the server→browser frame arrows in the diagram
+  const id=PROC.indexOf(step)+1, evName=step==='ready'?'ready':'progress';
+  lit(step);                       // light the ONE diagram arrow for this step
   paintSteps(step);
   line('<span class="ev">event: </span>'+evName+'\n'+
-       '<span class="meta">id: </span><span class="id">'+(++eventId)+'</span>\n'+
+       '<span class="meta">id: </span><span class="id">'+id+'</span>\n'+
        '<span class="meta">data: </span>{ <span class="k">"step"</span>: <span class="v">"'+step+'"</span>, <span class="k">"pct"</span>: '+PCT[step]+' }\n');
-  simBody.innerHTML=LABEL[step]+'<div class="bar-prog"><i style="width:'+PCT[step]+'%"></i></div>';
-  store.idAt=eventId;
+  setSim(LABEL[step],PCT[step]);
+  store.idAt=id;
 }
 
-// the SERVER-SIDE progression — runs whether or not the browser is connected
-function schedule(fromStep){
-  const plan=[['received',300],['scan',1500],['thumbnail',2800],['transcode',4200],['ready',5600]];
-  const start=order.indexOf(fromStep);
-  plan.forEach(([step,ms])=>{
-    if(order.indexOf(step)<start) return;          // already past on the server
-    t(ms,()=>{ store.step=step; if(step==='ready'){store.terminal=true;bDrop.disabled=true;}
-               if(sseOpen) emit(step); });
-  });
+// run one step of the whole flow — highlights the matching diagram part
+function runStep(step){
+  store.step=step;
+  if(step==='post'){
+    lit('post'); setSim('⬆ <b>Uploading…</b> POST /uploads',0);
+    line('<span class="ev">→ POST</span><span class="meta"> /uploads (multipart: the file)</span>');
+  } else if(step==='received'){
+    lit('received'); paintSteps('received'); setSim('📥 <b>Received</b> — server queued the job',5);
+    line('<span class="meta">← </span><span class="v">202</span><span class="meta"> { uploadId: '+jobId+' }   (server starts work in background)</span>\n');
+  } else if(step==='open'){
+    lit('open'); sseOpen=true; bDrop.disabled=false; setSim('🔌 <b>Stream open</b> — EventSource subscribed',5);
+    line('<span class="ev">→ GET</span><span class="meta"> /uploads/'+jobId+'/events   (EventSource opens)</span>');
+    line('<span class="meta">← </span><span class="v">200</span><span class="meta"> Content-Type: text/event-stream</span>');
+    line('<span class="meta">:ok   (connection held open ↓)</span>\n');
+  } else {                          // a PROC step: server pushes a frame
+    if(step==='ready'){store.terminal=true; bDrop.disabled=true;}
+    if(sseOpen) emit(step);         // only if the browser is connected
+  }                                 // (if dropped, server still advanced store.step — replayed on reconnect)
 }
+
+// schedule the whole flow, slowly, from the click moment
+const TIMELINE=[['post',0],['received',1200],['open',2600],
+                ['scan',4200],['thumbnail',5900],['transcode',7600],['ready',9300]];
+function runFlow(){TIMELINE.forEach(([s,ms])=>t(ms,()=>runStep(s)));}
 
 bUp.addEventListener('click',()=>{
   reset(false);
-  jobId=Math.floor(1000+Math.random()*9000); eventId=0;
-  store={step:'received',terminal:false};
-  litNode('upload');
-  line('<span class="meta">POST /uploads (multipart) → </span><span class="v">202</span> { uploadId: '+jobId+' }');
-  line('<span class="meta">GET /uploads/'+jobId+'/events  → 200 text/event-stream (open)</span>');
-  line('<span class="meta">:ok</span>\n');
-  sseOpen=true; bUp.disabled=true; bDrop.disabled=false; bRe.disabled=true;
-  schedule('received');
+  jobId=Math.floor(1000+Math.random()*9000);
+  store={step:'post',terminal:false};
+  bUp.disabled=true; bDrop.disabled=true; bRe.disabled=true;
+  runFlow();
 });
 
 bDrop.addEventListener('click',()=>{
-  // connection dies — but the server-side job keeps processing
-  sseOpen=false; sim.classList.add('crashed');
+  // connection dies — but the server-side job keeps processing (timers keep firing)
+  sseOpen=false; sim.classList.add('crashed'); lit('');
   simBody.innerHTML='✂ <b>Connection dropped.</b> EventSource closed.';
   line('\n<span class="crash">✗ connection dropped (network blip / tab backgrounded)</span>');
   line('<span class="crash">  server keeps processing; frames pile up unsent</span>\n');
@@ -458,17 +500,19 @@ bRe.addEventListener('click',()=>{
   line('<span class="replay">  → GET /uploads/'+jobId+'/events</span>');
   line('<span class="replay">  → Last-Event-ID: '+(store.idAt||0)+'   (browser resends the last id it saw)</span>');
   line('<span class="replay">  server replays current state immediately:</span>');
-  sseOpen=true; bRe.disabled=true;
-  emit(store.step);                                 // server replays whatever state is current NOW
-  if(!store.terminal){ schedule(store.step); bDrop.disabled=false; }
+  sseOpen=true; bRe.disabled=true; if(!store.terminal) bDrop.disabled=false;
+  lit('open');
+  if(PROC.includes(store.step)) emit(store.step);   // replay whatever state is current NOW
+  else setSim('🔌 <b>Stream re-opened</b> — waiting for first frame',5);
+  // pending timers keep firing → future steps push normally
 });
 
 function reset(full){
   clearTimers(); sseOpen=false; sim.classList.remove('crashed');
-  log.innerHTML=''; paintSteps('idle'); litNode('');
+  log.innerHTML=''; paintSteps('idle'); lit('');
   simBody.innerHTML='Idle. Hit <b>Upload</b>.<div class="bar-prog"><i></i></div>';
   bUp.disabled=false; bDrop.disabled=true; bRe.disabled=true;
-  if(full){jobId=null; store={}; eventId=0;}
+  if(full){jobId=null; store={};}
 }
 bRs.addEventListener('click',()=>reset(true));
 reset(true);
