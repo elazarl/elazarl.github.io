@@ -109,6 +109,11 @@
   details .body{padding:0 14px 14px;color:var(--dim);font-size:13.5px}
   footer{padding:14px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
   a{color:var(--acc)}
+  /* hover-for-Hebrew glossary words */
+  .he{border-bottom:1px dotted var(--warn);cursor:help}
+  .he:hover{color:var(--warn)}
+  .hetip{margin:8px 0 0;direction:rtl;text-align:right;color:var(--warn);font-size:13px}
+  .hetip .he{color:var(--warn)}
   /* ── phones ── */
   @media (max-width:760px){
     body{font-size:14px}
@@ -142,6 +147,7 @@
 <header>
   <h1>Server-Sent Events — how it actually works</h1>
   <p>One long-lived HTTP response the server never closes. The server <b>pushes</b> text frames down it; the browser's <code>EventSource</code> parses them into events. No polling, no WebSocket upgrade — just <code>Content-Type: text/event-stream</code>. Click any message arrow below for the TypeScript that sends or handles it. Then run the upload demo on the right.</p>
+  <p class="hetip">💡 טיפ: העבירו את העכבר מעל <span class="he" title="hover — ריחוף עם העכבר">מילים מקצועיות</span> המסומנות בקו מקווקו צהוב, כדי לראות תרגום לעברית.</p>
 </header>
 
 <div class="wrap">
@@ -398,12 +404,53 @@ ${C('// multi-instance? replace `bus` with Redis pub/sub — the handler is unch
 ${C('//   sub.subscribe(id); sub.on("message", (_, payload) => frame(res, ...))')}`}
 };
 
+// ---- hover-for-Hebrew glossary ---------------------------------------
+const GLOSS={
+  server:"שרת", browser:"דפדפן", connection:"חיבור", request:"בקשה", response:"תגובה",
+  stream:"זרם נתונים", push:"דחיפה (השרת יוזם)", pushes:"דוחף", polling:"תשאול חוזר",
+  websocket:"ווב-סוקט (חיבור דו-כיווני)", upload:"העלאת קובץ", subscribe:"הרשמה / מינוי",
+  endpoint:"נקודת קצה", handler:"מטפל (קוד שמטפל בבקשה)", async:"אסינכרוני (לא חוסם)",
+  asynchronous:"אסינכרוני", reconnect:"התחברות מחדש", reconnects:"מתחבר מחדש",
+  heartbeat:"פעימת לב (אות חיים לחיבור)", proxy:"פרוקסי (שרת מתווך)", proxies:"שרתי מתווך",
+  buffering:"אגירה (באפרינג)", replay:"שידור חוזר של המצב", replays:"משדר שוב את המצב",
+  frame:"מסגרת (פריים — יחידת מידע)", frames:"מסגרות (פריימים)", event:"אירוע",
+  latency:"השהיה (חביון)", overhead:"תקורה", multiplexes:"מרבב (מאחד על חיבור אחד)",
+  "full-duplex":"דו-כיווני מלא", "keep-alive":"השארת החיבור פתוח", pipe:"צינור נתונים",
+  monotonic:"מונוטוני (תמיד עולה)", terminal:"מצב סופי", timeout:"פסק זמן (ניתוק בהמתנה)",
+  multipart:"רב-חלקי (העלאת קבצים)", "fire-and-forget":"שגר-ושכח (בלי להמתין)"
+};
+const _keys=Object.keys(GLOSS).sort((a,b)=>b.length-a.length).map(k=>k.replace(/[-]/g,'\\$&'));
+const GLOSS_RE=new RegExp('\\b('+_keys.join('|')+')\\b','gi');
+const _SKIP=new Set(['PRE','CODE','SCRIPT','STYLE','BUTTON']);
+function annotate(root){
+  if(!root) return;
+  const tw=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode(n){
+    if(!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+    for(let p=n.parentElement;p&&p!==root.parentElement;p=p.parentElement)
+      if(_SKIP.has(p.tagName)||(p.classList&&p.classList.contains('he'))) return NodeFilter.FILTER_REJECT;
+    return new RegExp(GLOSS_RE.source,'i').test(n.nodeValue)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT;
+  }});
+  const todo=[]; for(let n;n=tw.nextNode();) todo.push(n);
+  todo.forEach(node=>{
+    const s=node.nodeValue, frag=document.createDocumentFragment(); let last=0,m; GLOSS_RE.lastIndex=0;
+    while(m=GLOSS_RE.exec(s)){
+      if(m.index>last) frag.appendChild(document.createTextNode(s.slice(last,m.index)));
+      const sp=document.createElement('span'); sp.className='he';
+      sp.title=GLOSS[m[0].toLowerCase()]; sp.textContent=m[0];
+      frag.appendChild(sp); last=m.index+m[0].length;
+    }
+    if(last<s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+    node.parentNode.replaceChild(frag,node);
+  });
+}
+
 const clickable=[...document.querySelectorAll('.seq [data-k]')];
 const info=document.getElementById('info');
 function render(d){
   info.innerHTML='<h3>'+d.h+'</h3>'+d.b+
     (d.cap?'<div class="cap">'+d.cap+'</div>':'')+
     (d.c?'<pre>'+d.c+'</pre>':'');
+  annotate(info);   // re-annotate the freshly rendered prose (skips the <pre>)
 }
 clickable.forEach(n=>n.addEventListener('click',()=>{
   clickable.forEach(x=>x.classList.remove('active'));n.classList.add('active');
@@ -517,6 +564,12 @@ function reset(full){
 }
 bRs.addEventListener('click',()=>reset(true));
 reset(true);
+
+// annotate the static prose (header intro, phase labels, notes, the why-SSE box, footer, info)
+[document.querySelector('header p'), document.querySelector('details .body'),
+ document.querySelector('footer'), info,
+ ...document.querySelectorAll('.plabel'), ...document.querySelectorAll('.note')
+].forEach(annotate);
 </script>
 </body>
 </html>
