@@ -73,6 +73,18 @@
   .hepop.on{display:block}
   .hetip{margin:0;direction:rtl;text-align:right;color:var(--warn);font-size:13px}
   .hetip .he{color:var(--warn)}
+  /* ── python client section ── */
+  .pysec{padding:24px 28px;border-top:1px solid var(--line)}
+  .pygrid{display:grid;grid-template-columns:1.35fr 1fr;gap:18px;align-items:start}
+  .pycode{padding:10px 4px}
+  .pyline{display:block;padding:1px 10px;border-left:2px solid transparent;cursor:pointer;
+          white-space:pre-wrap;word-break:break-word;transition:.1s}
+  .pyline:hover{background:rgba(88,166,255,.08);border-left-color:var(--line)}
+  .pyline.active{background:rgba(88,166,255,.14);border-left-color:var(--acc)}
+  .pyline.empty{cursor:default;min-height:10px}
+  .pyline.empty:hover{background:none;border-left-color:transparent}
+  .py-kw{color:#ff7b72} .py-fn{color:#d2a8ff} .py-str{color:#a5d6ff} .py-com{color:var(--dim)} .py-num{color:#79c0ff}
+  #pyinfo{position:sticky;top:14px}
   /* ── phones ── */
   @media (max-width:760px){
     body{font-size:14px}
@@ -84,6 +96,9 @@
     .wire{font-size:11.5px;padding:11px;line-height:2}
     table{font-size:12px}
     th,td{padding:7px 6px}
+    .pysec{padding:16px}
+    .pygrid{grid-template-columns:1fr}
+    #pyinfo{position:static}
     footer{padding:12px 16px}
   }
 </style>
@@ -209,6 +224,17 @@
   </div>
 </div>
 
+<section class="pysec">
+  <h2>Implement it yourself — a tiny HTTP/1.1 client in Python · click any line</h2>
+  <div class="pygrid">
+    <div class="wire pycode" id="pycode"><span class="pyline" data-k="imp"><span class="py-kw">import</span> socket</span><span class="pyline empty"> </span><span class="pyline" data-k="host">host = <span class="py-str">"example.com"</span></span><span class="pyline" data-k="sock">s = socket.<span class="py-fn">socket</span>(socket.AF_INET, socket.SOCK_STREAM)</span><span class="pyline" data-k="conn">s.<span class="py-fn">connect</span>((host, <span class="py-num">80</span>))</span><span class="pyline empty"> </span><span class="pyline" data-k="reqopen">request = (</span><span class="pyline" data-k="reqline">    <span class="py-str">"GET /search?q=cats HTTP/1.1\r\n"</span></span><span class="pyline" data-k="hhost">    <span class="py-str">f"Host: {host}\r\n"</span></span><span class="pyline" data-k="hua">    <span class="py-str">"User-Agent: tiny-client/1.0\r\n"</span></span><span class="pyline" data-k="haccept">    <span class="py-str">"Accept: text/html\r\n"</span></span><span class="pyline" data-k="hconn">    <span class="py-str">"Connection: close\r\n"</span></span><span class="pyline" data-k="hblank">    <span class="py-str">"\r\n"</span>            <span class="py-com"># blank line = end of headers</span></span><span class="pyline" data-k="reqclose">)</span><span class="pyline" data-k="send">s.<span class="py-fn">sendall</span>(request.<span class="py-fn">encode</span>())</span><span class="pyline empty"> </span><span class="pyline" data-k="respinit">response = <span class="py-str">b""</span></span><span class="pyline" data-k="recv"><span class="py-kw">while</span> chunk := s.<span class="py-fn">recv</span>(<span class="py-num">4096</span>):</span><span class="pyline" data-k="append">    response += chunk</span><span class="pyline" data-k="close">s.<span class="py-fn">close</span>()</span><span class="pyline empty"> </span><span class="pyline" data-k="print"><span class="py-fn">print</span>(response.<span class="py-fn">decode</span>(<span class="py-str">"utf-8"</span>, <span class="py-str">"replace"</span>))</span></div>
+    <div class="info" id="pyinfo">
+      <h3>Click any line of code</h3>
+      This is the whole protocol with no library hiding it — just a raw <span class="he" title="חיבור TCP — ערוץ אמין שמבטיח שכל הבתים יגיעו בסדר הנכון; HTTP רוכב עליו">TCP socket</span>. You build the request as plain text, send the bytes, and read the reply back. Click any line to see what it does and why.
+    </div>
+  </div>
+</section>
+
 <footer>HTTP/1.1 is <span class="he" title="חסר-מצב — כל בקשה עומדת בפני עצמה; השרת אינו זוכר בקשות קודמות, ולכן צריך עוגיות/טוקנים כדי לזהות אותך שוב">stateless</span>: each request stands alone. The server forgets you between requests — which is exactly why <span class="he" title="עוגייה — פיסת מידע קטנה שהשרת מבקש מהדפדפן לשמור ולשלוח בחזרה בכל בקשה, כדי לזהות את המשתמש">cookies</span> and tokens exist. Everything here is exact wire format; only the timings and data are illustrative.</footer>
 
 <script>
@@ -268,6 +294,38 @@ toks.forEach(n=>n.addEventListener('click',()=>{
   render(INFO[n.dataset.k]);
 }));
 
+// ---- the Python client, line by line --------------------------------
+const PYINFO={
+  imp:{h:"import socket",b:"Python's built-in low-level networking. HTTP is just text sent over a <span class='hl'>TCP</span> connection, so a raw socket is all we need to speak the protocol by hand — no <code>requests</code> library hiding the details.",cap:"line 1 — the only import"},
+  host:{h:"host = \"example.com\"",b:"The server we'll talk to. This same name also goes into the <code>Host</code> header below — that's how one server hosting many sites knows which one we want.",cap:"the target server"},
+  sock:{h:"create a TCP socket",b:"<code>SOCK_STREAM</code> = TCP (a reliable, ordered byte stream); <code>AF_INET</code> = IPv4. HTTP/1.1 always rides on a TCP connection — TCP guarantees the bytes arrive in order, so HTTP doesn't have to worry about it.",cap:"line 3"},
+  conn:{h:"connect to port 80",b:"Open the connection to the server on <span class='hl'>port 80</span> — the default for plain HTTP (HTTPS uses 443). Opening a connection costs a network round-trip; this is exactly the cost HTTP/1.1 avoids re-paying by keeping the connection alive.",cap:"line 4 — the handshake"},
+  reqopen:{h:"build the request as text",b:"We assemble the entire request as one string. This is the key lesson: <span class='hl'>an HTTP/1.1 request is just human-readable text</span> you could type by hand. The parentheses let us split it over several lines that Python joins together.",cap:"start of the request string"},
+  reqline:{h:"the request line",b:"<code>method path version</code> — the first line of every request. Note the <code>\\r\\n</code> at the end: HTTP lines must end with <span class='hl'>CRLF</span> (carriage-return + line-feed), not just <code>\\n</code>. The spec requires it.",cap:"line 1 of the HTTP message"},
+  hhost:{h:"the Host header (mandatory)",b:"The one header HTTP/1.1 <span class='hl'>requires</span>. Without it the server can't tell which of its many sites you mean. The <code>f\"...\"</code> just drops our <code>host</code> variable into the string.",cap:"required header"},
+  hua:{h:"User-Agent header",b:"Identifies our client software. Optional, but many servers log it or use it to decide what to send. We can claim to be anything — here, <code>tiny-client/1.0</code>.",cap:"who we are"},
+  haccept:{h:"Accept header",b:"Tells the server which formats we can handle. The server may use this to choose what to return — the same URL could answer HTML to a browser and JSON to an app.",cap:"content negotiation"},
+  hconn:{h:"Connection: close",b:"Asks the server to <span class='hl'>close the connection after one response</span>. We do this on purpose: it makes our read loop simple — when the server closes, we know the body is complete. (Drop this and the connection stays alive, HTTP/1.1's default — then you'd need <code>Content-Length</code> to know where the body ends.)",cap:"why our read loop terminates"},
+  hblank:{h:"the blank line — THE DELIMITER",b:"A lone <code>\\r\\n</code>. This empty line marks the <span class='hl'>end of the headers</span>. Everything before it is metadata; anything after would be the body. A GET has no body, so the request ends right here. <b>Forget this line and the server waits forever.</b>",cap:"end of headers"},
+  reqclose:{h:") — close the string",b:"Just closes the parenthesised string. At this point <code>request</code> holds the complete, valid HTTP message as text.",cap:"the request is built"},
+  send:{h:"send the bytes",b:"Networks carry <span class='hl'>bytes</span>, not text, so <code>.encode()</code> turns our string into UTF-8 bytes and <code>sendall</code> writes every one of them down the socket. That's the request, on the wire.",cap:"line — transmit"},
+  respinit:{h:"response = b\"\"",b:"An empty <span class='hl'>bytes</span> buffer (the <code>b</code> prefix). The reply arrives as raw bytes in pieces, and we'll append each piece here.",cap:"buffer for the reply"},
+  recv:{h:"read until the server closes",b:"<code>recv(4096)</code> reads up to 4 KB at a time. The walrus <code>:=</code> assigns each chunk and the loop runs until <code>recv</code> returns empty — which happens when the server closes (because we said <code>Connection: close</code>). That's how we know the whole response arrived.",cap:"the read loop"},
+  append:{h:"accumulate the chunks",b:"Each piece is appended to the buffer. TCP delivers a stream, not neat messages — one <code>recv</code> may return half a header or several at once, so we stitch them back together.",cap:"reassemble the stream"},
+  close:{h:"s.close()",b:"Release the connection and its resources. We're done — one request, one response.",cap:"cleanup"},
+  print:{h:"decode and print the reply",b:"Turn the raw bytes back into text and print it. What you'll see is <span class='hl'>exactly the response anatomy above</span>: the status line, the headers, a blank line, then the HTML body. <code>\"replace\"</code> guards against odd bytes so decoding never crashes.",cap:"status line + headers + body"}
+};
+const pyinfo=document.getElementById('pyinfo');
+const pylines=[...document.querySelectorAll('#pycode .pyline[data-k]')];
+function renderPy(d){
+  pyinfo.innerHTML='<h3>'+d.h+'</h3>'+d.b+(d.cap?'<div class="cap">'+d.cap+'</div>':'');
+  annotate(pyinfo);
+}
+pylines.forEach(n=>n.addEventListener('click',()=>{
+  pylines.forEach(x=>x.classList.remove('active'));n.classList.add('active');
+  renderPy(PYINFO[n.dataset.k]);
+}));
+
 // ---- hover/tap-for-Hebrew glossary -----------------------------------
 // only genuinely technical terms — each a full explanation, not a one-word gloss
 const GLOSS={
@@ -319,7 +377,7 @@ function annotate(root){
   });
 }
 // annotate static prose (not the wire blocks or hand-tagged spans)
-[document.querySelector('header p'), info, document.querySelector('footer'),
+[document.querySelector('header p'), info, pyinfo, document.querySelector('footer'),
  ...document.querySelectorAll('details .body')].forEach(annotate);
 
 // custom Hebrew tooltip — hover AND tap (native title doesn't fire on touch)
