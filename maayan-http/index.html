@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HTTP/1.1 — how a request and response are actually built</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pur:#bc8cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}
+  header{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 4px;font-size:22px}
+  header p{margin:0 0 6px;color:var(--dim);max-width:90ch}
+  header code{font-family:var(--mono);color:var(--pur);font-size:13px}
+  .wrap{display:grid;grid-template-columns:1.35fr 1fr;gap:0;min-height:calc(100vh - 92px)}
+  .left{padding:24px 28px;border-right:1px solid var(--line)}
+  .right{padding:24px 28px;display:flex;flex-direction:column;gap:14px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 12px}
+  /* ── the wire blocks: clickable tokens ── */
+  .wire{background:#010409;border:1px solid var(--line);border-radius:10px;padding:14px;
+        font-family:var(--mono);font-size:13px;line-height:1.85;white-space:pre-wrap;word-break:break-word}
+  .wire .cm{color:var(--dim)}
+  .tok{border-radius:5px;padding:1px 4px;margin:-1px 0;cursor:pointer;transition:.12s;
+       border:1px solid transparent}
+  .tok:hover{filter:brightness(1.4)}
+  .tok.active{border-color:currentColor;background:rgba(88,166,255,.12)}
+  .t-method{color:#ff7b72} .t-path{color:var(--acc)} .t-ver{color:var(--pur)}
+  .t-code{color:var(--ok)} .t-reason{color:var(--ok)}
+  .t-hname{color:var(--warn)} .t-hval{color:#a5d6ff} .t-body{color:var(--ink)}
+  .blank{color:var(--dim);font-style:italic}
+  .info{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc);
+        border-radius:8px;padding:14px 16px;font-size:13.5px;color:var(--dim);margin-top:14px}
+  .info h3{margin:0 0 6px;color:var(--ink);font-size:15px}
+  .info code{font-family:var(--mono);color:var(--pur);font-size:12.5px}
+  .info .hl{color:var(--ink)}
+  .info .cap{margin-top:10px;font-size:11.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+  /* ── headers reference table ── */
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+  td.h{font-family:var(--mono);color:var(--warn);white-space:nowrap}
+  td.d{color:var(--dim)}
+  .grp{color:var(--acc);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.06em;
+       padding-top:14px}
+  details{margin-top:16px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+  details>summary{cursor:pointer;padding:12px 14px;font-weight:600;font-size:14px;list-style:none}
+  details>summary::-webkit-details-marker{display:none}
+  details>summary::before{content:"▸ ";color:var(--acc)}
+  details[open]>summary::before{content:"▾ "}
+  details .body{padding:0 14px 14px;color:var(--dim);font-size:13.5px}
+  details .body code{font-family:var(--mono);color:var(--pur);font-size:12.5px}
+  .pill{display:inline-block;font-family:var(--mono);font-size:12px;padding:2px 7px;border-radius:6px;
+        margin:2px 4px 2px 0;border:1px solid var(--line)}
+  .pill b{color:var(--ink)}
+  .p-get{color:var(--acc)} .p-post{color:var(--ok)} .p-put{color:var(--warn)}
+  .p-del{color:var(--bad)} .p-other{color:var(--pur)}
+  .c1{color:var(--dim)} .c2{color:var(--ok)} .c3{color:var(--acc)} .c4{color:var(--warn)} .c5{color:var(--bad)}
+  footer{padding:14px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+  a{color:var(--acc)}
+  /* hover/tap-for-Hebrew glossary words */
+  .he{border-bottom:1px dotted var(--warn);cursor:help}
+  .he:hover,.he.he-on{color:var(--warn);background:rgba(210,153,34,.15)}
+  .hepop{position:fixed;z-index:60;display:none;direction:rtl;background:var(--warn);color:#1a1400;
+    font:600 13px/1.45 system-ui,sans-serif;padding:7px 11px;border-radius:8px;max-width:280px;
+    pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.45)}
+  .hepop::after{content:"";position:absolute;left:50%;transform:translateX(-50%);border:6px solid transparent}
+  .hepop:not(.below)::after{top:100%;border-top-color:var(--warn)}
+  .hepop.below::after{bottom:100%;border-bottom-color:var(--warn)}
+  .hepop.on{display:block}
+  .hetip{margin:0;direction:rtl;text-align:right;color:var(--warn);font-size:13px}
+  .hetip .he{color:var(--warn)}
+  /* ── phones ── */
+  @media (max-width:760px){
+    body{font-size:14px}
+    header{padding:16px}
+    h1{font-size:18px}
+    .wrap{grid-template-columns:1fr;min-height:0}
+    .left{border-right:0;border-bottom:1px solid var(--line);padding:16px}
+    .right{padding:16px}
+    .wire{font-size:11.5px;padding:11px;line-height:2}
+    table{font-size:12px}
+    th,td{padding:7px 6px}
+    footer{padding:12px 16px}
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>HTTP/1.1 — how a request and a response are actually built</h1>
+  <p>Every web page, API call and image download is <span class="he" title="טקסט רגיל וקריא לבני אדם (אותיות ומספרים), להבדיל מנתונים בינאריים גולמיים">plain text</span> travelling over the network in a fixed shape: a first line, then <span class="he" title="כותרות — שורות מטא-נתונים בתחילת ההודעה שמתארות אותה: סוג התוכן, אורכו, שפה, מי שולח וכו׳">headers</span>, then a blank line, then an optional <span class="he" title="גוף ההודעה — התוכן השימושי עצמו (HTML, JSON, תמונה). מגיע אחרי הכותרות והשורה הריקה">body</span>. The <span class="he" title="הצד שיוזם את הבקשה — בדרך כלל הדפדפן או אפליקציה">client</span> sends a <b>request</b>, the <span class="he" title="המחשב המרוחק שמקבל את הבקשה ומחזיר תשובה">server</span> sends back a <b>response</b>. That's the whole protocol. Click any colored part below to see what it means.</p>
+  <p class="hetip">💡 טיפ: העבירו את העכבר (או הקישו באצבע) מעל <span class="he" title="hover — ריחוף עם העכבר / מגע באצבע במובייל">מילים מקצועיות</span> המסומנות בקו מקווקו צהוב, כדי לראות הסבר מלא בעברית.</p>
+</header>
+
+<div class="wrap">
+  <div class="left">
+    <h2>Anatomy of an HTTP request · click any colored part</h2>
+    <div class="wire" id="req"><span class="tok t-method" data-k="method">GET</span> <span class="tok t-path" data-k="path">/search?q=cats&amp;page=2</span> <span class="tok t-ver" data-k="ver">HTTP/1.1</span>          <span class="cm">← request line</span>
+<span class="tok t-hname" data-k="host">Host:</span> <span class="t-hval">www.example.com</span>
+<span class="tok t-hname" data-k="ua">User-Agent:</span> <span class="t-hval">Mozilla/5.0 (iPhone)</span>
+<span class="tok t-hname" data-k="accept">Accept:</span> <span class="t-hval">text/html,application/json</span>
+<span class="tok t-hname" data-k="cookie">Cookie:</span> <span class="t-hval">session=ab12cd34</span>
+<span class="blank">␤  ← blank line: "headers are done"</span>
+<span class="cm">(GET has no body)</span></div>
+
+    <h2 style="margin-top:22px">Anatomy of an HTTP response · click any colored part</h2>
+    <div class="wire" id="res"><span class="tok t-ver" data-k="ver">HTTP/1.1</span> <span class="tok t-code" data-k="code">200</span> <span class="tok t-reason" data-k="reason">OK</span>                       <span class="cm">← status line</span>
+<span class="tok t-hname" data-k="ctype">Content-Type:</span> <span class="t-hval">text/html; charset=utf-8</span>
+<span class="tok t-hname" data-k="clen">Content-Length:</span> <span class="t-hval">61</span>
+<span class="tok t-hname" data-k="cache">Cache-Control:</span> <span class="t-hval">max-age=3600</span>
+<span class="tok t-hname" data-k="setcookie">Set-Cookie:</span> <span class="t-hval">session=ab12cd34; HttpOnly</span>
+<span class="blank">␤  ← blank line: body starts below</span>
+<span class="tok t-body" data-k="body">&lt;html&gt;&lt;body&gt;&lt;h1&gt;Found 2 cats&lt;/h1&gt;&lt;/body&gt;&lt;/html&gt;</span></div>
+
+    <div class="info" id="info">
+      <h3>Click any colored token above</h3>
+      The request and response share the same skeleton — only the <span class="hl">first line</span> differs.
+      A request's first line says <span class="hl">what to do</span> (<code>method path version</code>); a response's
+      first line says <span class="hl">what happened</span> (<code>version code reason</code>). Everything after is
+      headers, one blank line, then the optional body.
+    </div>
+
+    <details>
+      <summary>The methods — the verb that says what you want done</summary>
+      <div class="body">
+        <p>The first word of a request. It tells the server your <span class="he" title="כוונה — מה הלקוח רוצה שהשרת יעשה עם המשאב">intent</span>:</p>
+        <span class="pill p-get"><b>GET</b> — read, fetch a resource</span>
+        <span class="pill p-post"><b>POST</b> — create / submit data</span>
+        <span class="pill p-put"><b>PUT</b> — replace a resource</span>
+        <span class="pill p-other"><b>PATCH</b> — partly update</span>
+        <span class="pill p-del"><b>DELETE</b> — remove</span>
+        <span class="pill p-other"><b>HEAD</b> — headers only</span>
+        <span class="pill p-other"><b>OPTIONS</b> — what's allowed?</span>
+        <p style="margin-top:10px">GET and HEAD are <span class="he" title="בטוח — בקשה שרק קוראת מידע ולא משנה דבר בשרת">safe</span> (read-only). GET, PUT and DELETE are <span class="he" title="אידמפוטנטי — פעולה שחזרה עליה כמה פעמים נותנת בדיוק אותה תוצאה כמו פעם אחת (לעומת POST, שכל שליחה יוצרת רשומה נוספת)">idempotent</span> — repeating them is harmless. POST is neither: submit a form twice and you may create two orders.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>The status codes — the 3-digit verdict in the response</summary>
+      <div class="body">
+        <p>The first digit is the whole story:</p>
+        <p><span class="c1">1xx</span> informational · <span class="c2">2xx</span> success · <span class="c3">3xx</span> <span class="he" title="הפניה — השרת אומר ׳המשאב נמצא בכתובת אחרת, פנה לשם׳">redirect</span> · <span class="c4">4xx</span> you (the client) erred · <span class="c5">5xx</span> the server erred.</p>
+        <table style="margin-top:8px"><tbody>
+          <tr><td class="h c2">200</td><td class="d">OK — here's what you asked for</td></tr>
+          <tr><td class="h c2">201</td><td class="d">Created — your POST made something</td></tr>
+          <tr><td class="h c3">301</td><td class="d">Moved Permanently — use the new URL</td></tr>
+          <tr><td class="h c3">304</td><td class="d">Not Modified — use your <span class="he" title="מטמון — עותק שמור מקומית כדי לא להוריד שוב את אותו דבר">cached</span> copy</td></tr>
+          <tr><td class="h c4">400</td><td class="d">Bad Request — malformed</td></tr>
+          <tr><td class="h c4">401</td><td class="d">Unauthorized — log in first</td></tr>
+          <tr><td class="h c4">403</td><td class="d">Forbidden — you can't, even logged in</td></tr>
+          <tr><td class="h c4">404</td><td class="d">Not Found — no such resource</td></tr>
+          <tr><td class="h c5">500</td><td class="d">Internal Server Error — server bug</td></tr>
+          <tr><td class="h c5">503</td><td class="d">Service Unavailable — overloaded/down</td></tr>
+        </tbody></table>
+      </div>
+    </details>
+
+    <details>
+      <summary>Why "1.1"? Persistent connections &amp; keep-alive</summary>
+      <div class="body">
+        <p>HTTP/1.0 opened a fresh <span class="he" title="חיבור — ערוץ תקשורת פתוח בין הלקוח לשרת שדרכו עוברים הבתים">connection</span> per request and closed it after the response — expensive, since every connection costs a round-trip to set up. HTTP/1.1 made <span class="he" title="חיבור מתמשך — שמירת אותו חיבור פתוח לשליחת בקשות נוספות, במקום לפתוח חדש בכל פעם">persistent connections</span> the default (<code>Connection: keep-alive</code>): one connection serves many requests in a row. It also added the mandatory <code>Host</code> header, so one server (one IP) can host many sites — the foundation of modern shared hosting.</p>
+      </div>
+    </details>
+  </div>
+
+  <div class="right">
+    <h2>Common headers — the metadata lines</h2>
+    <table><tbody id="htable">
+      <tr><td class="grp" colspan="2">On the request</td></tr>
+      <tr><td class="h">Host</td><td class="d">Which site you want (required in 1.1)</td></tr>
+      <tr><td class="h">User-Agent</td><td class="d">Which browser/app is asking</td></tr>
+      <tr><td class="h">Accept</td><td class="d">Formats the client can handle</td></tr>
+      <tr><td class="h">Accept-Language</td><td class="d">Preferred languages</td></tr>
+      <tr><td class="h">Authorization</td><td class="d">Credentials / token</td></tr>
+      <tr><td class="h">Cookie</td><td class="d">Data the server set earlier</td></tr>
+      <tr><td class="h">Content-Type</td><td class="d">Format of the body you're sending</td></tr>
+      <tr><td class="h">Referer</td><td class="d">The page you came from</td></tr>
+
+      <tr><td class="grp" colspan="2">On the response</td></tr>
+      <tr><td class="h">Content-Type</td><td class="d">Format of the body (the <span class="he" title="סוג MIME — תווית תקנית שמתארת את פורמט התוכן, למשל text/html או image/png, כדי שהדפדפן ידע איך להציג אותו">MIME type</span>)</td></tr>
+      <tr><td class="h">Content-Length</td><td class="d">Body size in bytes</td></tr>
+      <tr><td class="h">Content-Encoding</td><td class="d"><span class="he" title="דחיסה — כיווץ התוכן (למשל gzip) כדי שיעבור מהר יותר ברשת">Compression</span> used, e.g. gzip</td></tr>
+      <tr><td class="h">Cache-Control</td><td class="d">How long it may be cached</td></tr>
+      <tr><td class="h">Set-Cookie</td><td class="d">Tells the browser to store a cookie</td></tr>
+      <tr><td class="h">Location</td><td class="d">Where to go (with a 3xx redirect)</td></tr>
+      <tr><td class="h">Server</td><td class="d">Which server software answered</td></tr>
+    </tbody></table>
+
+    <details open>
+      <summary>A real round-trip — POST with a body</summary>
+      <div class="body">
+        <p>A login form submission. Note the request now <em>has</em> a body, and <code>Content-Length</code> counts its bytes:</p>
+        <div class="wire" style="margin-top:8px"><span class="t-method">POST</span> <span class="t-path">/login</span> <span class="t-ver">HTTP/1.1</span>
+<span class="t-hname">Host:</span> <span class="t-hval">example.com</span>
+<span class="t-hname">Content-Type:</span> <span class="t-hval">application/json</span>
+<span class="t-hname">Content-Length:</span> <span class="t-hval">44</span>
+<span class="blank">␤</span>
+<span class="t-body">{"user":"maayan","pass":"s3cret!"}</span></div>
+        <div class="wire" style="margin-top:10px"><span class="t-ver">HTTP/1.1</span> <span class="t-code">200</span> <span class="t-reason">OK</span>
+<span class="t-hname">Content-Type:</span> <span class="t-hval">application/json</span>
+<span class="t-hname">Set-Cookie:</span> <span class="t-hval">session=ab12cd34; HttpOnly</span>
+<span class="blank">␤</span>
+<span class="t-body">{"ok":true,"name":"Maayan"}</span></div>
+      </div>
+    </details>
+  </div>
+</div>
+
+<footer>HTTP/1.1 is <span class="he" title="חסר-מצב — כל בקשה עומדת בפני עצמה; השרת אינו זוכר בקשות קודמות, ולכן צריך עוגיות/טוקנים כדי לזהות אותך שוב">stateless</span>: each request stands alone. The server forgets you between requests — which is exactly why <span class="he" title="עוגייה — פיסת מידע קטנה שהשרת מבקש מהדפדפן לשמור ולשלוח בחזרה בכל בקשה, כדי לזהות את המשתמש">cookies</span> and tokens exist. Everything here is exact wire format; only the timings and data are illustrative.</footer>
+
+<script>
+const INFO={
+  method:{h:"The method — GET",
+    b:"The first word of every request: the <span class='hl'>verb</span>. <code>GET</code> means “fetch this, change nothing”. Other methods: POST (create), PUT (replace), PATCH (modify), DELETE (remove). It tells the server your <span class='hl'>intent</span> before it reads anything else.",
+    cap:"request line · word 1 of 3"},
+  path:{h:"The path (+ query string)",
+    b:"<span class='hl'>Which resource</span> on the server you want: <code>/search</code>. Everything after <code>?</code> is the <span class='hl'>query string</span> — <code>q=cats&amp;page=2</code> — key=value pairs joined by <code>&amp;</code>, used to pass parameters. The host name is <em>not</em> here; it lives in the <code>Host</code> header.",
+    cap:"request line · word 2 of 3"},
+  ver:{h:"The protocol version",
+    b:"<code>HTTP/1.1</code> — which rules of the protocol both sides agree to speak. 1.1 added persistent connections, the mandatory <code>Host</code> header, and chunked transfer. It appears on both the request line and the response status line.",
+    cap:"version — on request line and status line"},
+  host:{h:"Host header",
+    b:"<span class='hl'>Required in HTTP/1.1.</span> One IP address can serve hundreds of sites; <code>Host: www.example.com</code> tells the server <span class='hl'>which one</span> you actually want. Without it the server wouldn't know which website to answer for.",
+    cap:"request header"},
+  ua:{h:"User-Agent header",
+    b:"A self-description of the client software — browser, OS, app. Servers use it to send mobile vs desktop layouts, or to gather analytics. It's just a string the client claims; it can be anything.",
+    cap:"request header"},
+  accept:{h:"Accept header",
+    b:"The formats the client can handle, best-first: <code>text/html, application/json</code>. The server picks one and answers with a matching <code>Content-Type</code>. This negotiation is how one URL can return HTML to a browser and JSON to an app.",
+    cap:"request header — content negotiation"},
+  cookie:{h:"Cookie header",
+    b:"Data the server handed the browser earlier (via <code>Set-Cookie</code>), sent back on <span class='hl'>every</span> request to the same site. Because HTTP is stateless, this is how the server recognizes you across requests — e.g. <code>session=ab12cd34</code> identifies your logged-in session.",
+    cap:"request header"},
+  code:{h:"Status code — 200",
+    b:"A 3-digit verdict. The <span class='hl'>first digit</span> is the category: 2xx success, 3xx redirect, 4xx your fault, 5xx server fault. <code>200</code> = success, here's your content. <code>404</code> = not found, <code>500</code> = server crashed.",
+    cap:"status line · the result"},
+  reason:{h:"Reason phrase — OK",
+    b:"A short human-readable label that pairs with the code: <code>200 OK</code>, <code>404 Not Found</code>, <code>503 Service Unavailable</code>. Purely for humans — software reads the number, not this text.",
+    cap:"status line · for humans"},
+  ctype:{h:"Content-Type header",
+    b:"The <span class='hl'>format of the body</span> — the MIME type. <code>text/html</code> makes the browser render a page; <code>application/json</code> is data; <code>image/png</code> is a picture. <code>charset=utf-8</code> says which text encoding. Get this wrong and the browser shows raw code instead of a page.",
+    cap:"response header — also on requests with a body"},
+  clen:{h:"Content-Length header",
+    b:"The body size in <span class='hl'>bytes</span>, so the receiver knows exactly when the body ends — essential on a persistent connection where the next response follows immediately. (The alternative is <code>Transfer-Encoding: chunked</code> when the size isn't known up front.)",
+    cap:"response header"},
+  cache:{h:"Cache-Control header",
+    b:"Caching rules: <code>max-age=3600</code> means “reuse this for 3600 seconds without re-asking”. This is why a second page load is instant — the browser serves its stored copy instead of hitting the network. <code>no-cache</code> forces a fresh check every time.",
+    cap:"response header"},
+  setcookie:{h:"Set-Cookie header",
+    b:"The server asks the browser to <span class='hl'>store</span> a value and send it back on future requests (as a <code>Cookie</code> header). <code>HttpOnly</code> hides it from JavaScript for safety. This is the mechanism that turns stateless HTTP into a logged-in session.",
+    cap:"response header"},
+  body:{h:"The body (payload)",
+    b:"The actual content, after the blank line: the HTML page, the JSON, the image bytes. Its format is declared by <code>Content-Type</code> and its length by <code>Content-Length</code>. GET requests usually have none; responses and POSTs usually do.",
+    cap:"the payload"}
+};
+
+const info=document.getElementById('info');
+const toks=[...document.querySelectorAll('#req .tok, #res .tok')];
+function render(d){
+  info.innerHTML='<h3>'+d.h+'</h3>'+d.b+(d.cap?'<div class="cap">'+d.cap+'</div>':'');
+  annotate(info);
+}
+toks.forEach(n=>n.addEventListener('click',()=>{
+  toks.forEach(x=>x.classList.remove('active'));n.classList.add('active');
+  render(INFO[n.dataset.k]);
+}));
+
+// ---- hover/tap-for-Hebrew glossary -----------------------------------
+// only genuinely technical terms — each a full explanation, not a one-word gloss
+const GLOSS={
+  request:"בקשה — ההודעה שהלקוח שולח לשרת כדי לקבל או לשלוח מידע",
+  response:"תגובה — ההודעה שהשרת מחזיר ללקוח בתגובה לבקשה",
+  header:"כותרת — שורת מטא-מידע בתחילת ההודעה שמתארת אותה (סוג התוכן, אורכו, שפה)",
+  headers:"כותרות — שורות מטא-מידע בתחילת ההודעה שמתארות אותה",
+  body:"גוף ההודעה — התוכן השימושי עצמו (HTML, JSON, תמונה), אחרי הכותרות והשורה הריקה",
+  payload:"המטען — גוף הנתונים השימושי שנשלח בהודעה (להבדיל מהכותרות סביבו)",
+  method:"שיטה (method) — הפועל בתחילת הבקשה שאומר מה לעשות: GET לקריאה, POST ליצירה וכו׳",
+  client:"לקוח — הצד שיוזם את הבקשה, בדרכ כלל הדפדפן או אפליקציה",
+  server:"שרת — המחשב המרוחק שמקבל את הבקשה ומחזיר תגובה",
+  protocol:"פרוטוקול — מערכת הכללים המוסכמת ששני הצדדים מדברים לפיה",
+  stateless:"חסר-מצב — כל בקשה עומדת בפני עצמה; השרת אינו זוכר בקשות קודמות",
+  idempotent:"אידמפוטנטי — פעולה שחזרה עליה כמה פעמים מביאה לאותה תוצאה כמו פעם אחת",
+  cookie:"עוגייה — פיסת מידע קטנה שהשרת מבקש מהדפדפן לשמור ולשלוח בחזרה, כדי לזהות אותך",
+  cookies:"עוגיות — פיסות מידע קטנות שהשרת שומר בדפדפן כדי לזהות את המשתמש שוב",
+  redirect:"הפניה — השרת אומר ׳המשאב עבר לכתובת אחרת, פנה לשם׳",
+  cache:"מטמון — עותק ששמור מקומית כדי לא להוריד שוב את אותו דבר",
+  cached:"שמור במטמון — עותק שכבר הורד ונשמר מקומית, כדי לטעון אותו מיד בלי רשת",
+  connection:"חיבור — ערוץ תקשורת פתוח בין הלקוח לשרת שדרכו עוברים הבתים",
+  "keep-alive":"שמירת החיבור פתוח לשימוש חוזר במקום לסגור אותו אחרי כל בקשה",
+  compression:"דחיסה — כיווץ התוכן (כמו gzip) כדי שיעבור מהר יותר ברשת",
+  safe:"בטוח — בקשה שרק קוראת מידע ולא משנה דבר בשרת",
+  intent:"כוונה — מה הלקוח רוצה שהשרת יעשה עם המשאב"
+};
+const _keys=Object.keys(GLOSS).sort((a,b)=>b.length-a.length).map(k=>k.replace(/[-]/g,'\\$&'));
+const GLOSS_RE=new RegExp('\\b('+_keys.join('|')+')\\b','gi');
+const _SKIP=new Set(['PRE','SCRIPT','STYLE','BUTTON','TD','TH']);
+function annotate(root){
+  if(!root) return;
+  const tw=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode(n){
+    if(!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+    for(let p=n.parentElement;p&&p!==root.parentElement;p=p.parentElement)
+      if(_SKIP.has(p.tagName)||(p.classList&&(p.classList.contains('he')||p.classList.contains('wire')))) return NodeFilter.FILTER_REJECT;
+    return new RegExp(GLOSS_RE.source,'i').test(n.nodeValue)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT;
+  }});
+  const todo=[]; for(let n;n=tw.nextNode();) todo.push(n);
+  todo.forEach(node=>{
+    const s=node.nodeValue, frag=document.createDocumentFragment(); let last=0,m; GLOSS_RE.lastIndex=0;
+    while(m=GLOSS_RE.exec(s)){
+      if(m.index>last) frag.appendChild(document.createTextNode(s.slice(last,m.index)));
+      const sp=document.createElement('span'); sp.className='he';
+      const he=GLOSS[m[0].toLowerCase()]; sp.title=he; sp.dataset.he=he; sp.textContent=m[0];
+      frag.appendChild(sp); last=m.index+m[0].length;
+    }
+    if(last<s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+    node.parentNode.replaceChild(frag,node);
+  });
+}
+// annotate static prose (not the wire blocks or hand-tagged spans)
+[document.querySelector('header p'), info, document.querySelector('footer'),
+ ...document.querySelectorAll('details .body')].forEach(annotate);
+
+// custom Hebrew tooltip — hover AND tap (native title doesn't fire on touch)
+const hepop=document.createElement('div'); hepop.className='hepop'; document.body.appendChild(hepop);
+let heCur=null;
+function showHe(el){
+  if(heCur) heCur.classList.remove('he-on');
+  heCur=el; el.classList.add('he-on');
+  hepop.textContent=el.dataset.he||el.title;
+  hepop.classList.add('on');
+  const r=el.getBoundingClientRect(), ph=hepop.offsetHeight;
+  const cx=Math.max(145,Math.min(r.left+r.width/2,window.innerWidth-145));
+  hepop.style.left=cx+'px';
+  if(r.top>ph+14){
+    hepop.classList.remove('below');
+    hepop.style.top=(r.top-8)+'px'; hepop.style.transform='translate(-50%,-100%)';
+  }else{
+    hepop.classList.add('below');
+    hepop.style.top=(r.bottom+8)+'px'; hepop.style.transform='translate(-50%,0)';
+  }
+}
+function hideHe(){ hepop.classList.remove('on'); if(heCur){heCur.classList.remove('he-on');heCur=null;} }
+document.addEventListener('mouseover',e=>{const el=e.target.closest('.he'); if(el) showHe(el);});
+document.addEventListener('mouseout', e=>{if(e.target.closest('.he')) hideHe();});
+document.addEventListener('click',    e=>{const el=e.target.closest('.he'); if(el){e.stopPropagation(); showHe(el);} else hideHe();});
+window.addEventListener('scroll',hideHe,true);
+</script>
+</body>
+</html>
