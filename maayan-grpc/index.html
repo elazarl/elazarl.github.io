@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>gRPC — how it actually works, down to the bytes</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pur:#bc8cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}
+  header{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 4px;font-size:22px}
+  header p{margin:0 0 6px;color:var(--dim);max-width:90ch}
+  header code{font-family:var(--mono);color:var(--pur);font-size:13px}
+  .wrap{display:grid;grid-template-columns:1.35fr 1fr;gap:0;min-height:calc(100vh - 92px)}
+  .left{padding:24px 28px;border-right:1px solid var(--line)}
+  .right{padding:24px 28px;display:flex;flex-direction:column;gap:14px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 12px}
+  /* ── the wire blocks: clickable tokens ── */
+  .wire{background:#010409;border:1px solid var(--line);border-radius:10px;padding:14px;
+        font-family:var(--mono);font-size:13px;line-height:1.85;white-space:pre-wrap;word-break:break-word}
+  .wire .cm{color:var(--dim)}
+  .tok{border-radius:5px;padding:1px 4px;margin:-1px 0;cursor:pointer;transition:.12s;
+       border:1px solid transparent}
+  .tok:hover{filter:brightness(1.4)}
+  .tok.active{border-color:currentColor;background:rgba(88,166,255,.12)}
+  .t-kw{color:#ff7b72} .t-svc{color:var(--pur)} .t-msg{color:var(--acc)}
+  .t-field{color:#a5d6ff} .t-num{color:#79c0ff}
+  .t-hname{color:var(--warn)} .t-hval{color:#a5d6ff} .t-body{color:var(--ink)}
+  .blank{color:var(--dim);font-style:italic}
+  .info{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc);
+        border-radius:8px;padding:14px 16px;font-size:13.5px;color:var(--dim);margin-top:14px}
+  .info h3{margin:0 0 6px;color:var(--ink);font-size:15px}
+  .info code{font-family:var(--mono);color:var(--pur);font-size:12.5px}
+  .info .hl{color:var(--ink)}
+  .info .cap{margin-top:10px;font-size:11.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+  /* ── reference table ── */
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+  td.h{font-family:var(--mono);color:var(--warn);white-space:nowrap}
+  td.d{color:var(--dim)}
+  .grp{color:var(--acc);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.06em;padding-top:14px}
+  details{margin-top:16px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+  details>summary{cursor:pointer;padding:12px 14px;font-weight:600;font-size:14px;list-style:none}
+  details>summary::-webkit-details-marker{display:none}
+  details>summary::before{content:"▸ ";color:var(--acc)}
+  details[open]>summary::before{content:"▾ "}
+  details .body{padding:0 14px 14px;color:var(--dim);font-size:13.5px}
+  details .body code{font-family:var(--mono);color:var(--pur);font-size:12.5px}
+  /* ── RPC-type cards ── */
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 13px;cursor:pointer;transition:.12s}
+  .card:hover{border-color:var(--acc)}
+  .card.active{border-color:var(--acc);box-shadow:0 0 0 2px rgba(88,166,255,.25)}
+  .card .t{font-weight:600;font-size:13.5px}
+  .card .s{color:var(--dim);font-size:11.5px;font-family:var(--mono);margin-top:4px}
+  .card .s b{color:var(--ok)}
+  footer{padding:14px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+  a{color:var(--acc)}
+  /* hover/tap-for-Hebrew glossary words */
+  .he{border-bottom:1px dotted var(--warn);cursor:help}
+  .he:hover,.he.he-on{color:var(--warn);background:rgba(210,153,34,.15)}
+  .hepop{position:fixed;z-index:60;display:none;direction:rtl;background:var(--warn);color:#1a1400;
+    font:600 13px/1.45 system-ui,sans-serif;padding:7px 11px;border-radius:8px;max-width:290px;
+    pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.45)}
+  .hepop::after{content:"";position:absolute;left:50%;transform:translateX(-50%);border:6px solid transparent}
+  .hepop:not(.below)::after{top:100%;border-top-color:var(--warn)}
+  .hepop.below::after{bottom:100%;border-bottom-color:var(--warn)}
+  .hepop.on{display:block}
+  .hetip{margin:0;direction:rtl;text-align:right;color:var(--warn);font-size:13px}
+  .hetip .he{color:var(--warn)}
+  /* ── byte-breakdown section ── */
+  .bytesec{padding:24px 28px;border-top:1px solid var(--line)}
+  .bytegrid{display:grid;grid-template-columns:1.35fr 1fr;gap:18px;align-items:start}
+  .bytes{background:#010409;border:1px solid var(--line);border-radius:10px;padding:16px;
+         font-family:var(--mono);font-size:20px;line-height:2.2;letter-spacing:1px}
+  .byte{padding:3px 7px;border-radius:6px;border:1px solid transparent;cursor:pointer;transition:.1s;white-space:nowrap}
+  .byte:hover{filter:brightness(1.5)}
+  .byte.active{border-color:currentColor;background:rgba(88,166,255,.16)}
+  .b-tag{color:#ff7b72} .b-len{color:var(--warn)} .b-data{color:var(--ok)}
+  .bytelegend{font-size:11.5px;color:var(--dim);margin-top:10px;font-family:var(--mono)}
+  .bytelegend span{margin-right:14px}
+  #byteinfo{position:sticky;top:14px}
+  /* ── phones ── */
+  @media (max-width:760px){
+    body{font-size:14px}
+    header{padding:16px}
+    h1{font-size:18px}
+    .wrap{grid-template-columns:1fr;min-height:0}
+    .left{border-right:0;border-bottom:1px solid var(--line);padding:16px}
+    .right{padding:16px}
+    .wire{font-size:11.5px;padding:11px;line-height:2}
+    table{font-size:12px}
+    th,td{padding:7px 6px}
+    .cards{grid-template-columns:1fr}
+    .bytesec{padding:16px}
+    .bytegrid{grid-template-columns:1fr}
+    .bytes{font-size:16px;line-height:2.4}
+    #byteinfo{position:static}
+    footer{padding:12px 16px}
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>gRPC — how it actually works, down to the bytes</h1>
+  <p>gRPC lets one program <span class="he" title="קריאה לפרוצדורה מרוחקת (RPC) — הפעלת פונקציה שרצה על מחשב אחר, כאילו קראת לפונקציה רגילה אצלך">call a function on another machine</span> as if it were local. You describe the service once in a <code>.proto</code> file; a code generator builds the client &amp; server <span class="he" title="stub — קוד שנוצר אוטומטית מקובץ ה-proto, שעוטף את התקשורת ברשת כך שקריאה מרוחקת נראית כמו קריאה לפונקציה מקומית">stubs</span>. On the wire it rides <span class="he" title="HTTP/2 — גרסת HTTP בינארית שמאפשרת לרבב כמה קריאות במקביל על חיבור TCP אחד">HTTP/2</span>, and the messages are encoded with <span class="he" title="Protocol Buffers — פורמט בינארי דחוס וסכמה לתיאור מבני נתונים; gRPC מקודד בו את ההודעות">Protocol Buffers</span> — a compact <span class="he" title="בינארי — נתונים גולמיים (בתים), לא טקסט קריא לבני אדם כמו JSON">binary</span> format. Click any colored part to see what it means.</p>
+  <p class="hetip">💡 טיפ: העבירו את העכבר (או הקישו באצבע) מעל <span class="he" title="hover — ריחוף עם העכבר / מגע באצבע במובייל">מילים מקצועיות</span> המסומנות בקו מקווקו צהוב, כדי לראות הסבר מלא בעברית.</p>
+</header>
+
+<div class="wrap">
+  <div class="left">
+    <h2>The contract — one .proto file · click any colored part</h2>
+    <div class="wire" id="proto"><span class="tok t-kw" data-k="syntax">syntax</span> = "proto3";
+
+<span class="tok t-kw" data-k="service">service</span> <span class="tok t-svc" data-k="svc">Greeter</span> {
+  <span class="tok t-kw" data-k="rpc">rpc</span> <span class="tok t-svc" data-k="method">SayHello</span> (<span class="t-msg">HelloRequest</span>) returns (<span class="t-msg">HelloReply</span>);
+}
+
+<span class="tok t-kw" data-k="message">message</span> <span class="tok t-msg" data-k="msg">HelloRequest</span> {
+  <span class="tok t-field" data-k="field">string name = <span class="t-num">1</span>;</span>   <span class="cm">← field number, not a value</span>
+}
+message HelloReply {
+  string message = <span class="t-num">1</span>;
+}</div>
+
+    <div class="info" id="info">
+      <h3>Click any colored token above</h3>
+      The <code>.proto</code> file is the single source of truth — an
+      <span class="he" title="IDL — שפת תיאור ממשק: שפה ניטרלית-שפה לתיאור השירות וההודעות, שממנה נוצר קוד לכל שפת תכנות">IDL</span>
+      both sides share. Run the protobuf compiler on it and you get a typed
+      <span class="he" title="stub — קוד שנוצר אוטומטית, שעוטף את התקשורת כך שקריאה מרוחקת נראית כקריאה מקומית">stub</span>
+      in any language. The client calls <code>greeter.SayHello(req)</code>; the bytes below are what actually crosses the network.
+    </div>
+
+    <h2 style="margin-top:22px">The four kinds of call · click a card</h2>
+    <div class="cards" id="cards">
+      <div class="card" data-k="unary"><div class="t">① Unary</div><div class="s"><b>1</b> req → <b>1</b> resp</div></div>
+      <div class="card" data-k="sstream"><div class="t">② Server streaming</div><div class="s"><b>1</b> req → <b>N</b> resp</div></div>
+      <div class="card" data-k="cstream"><div class="t">③ Client streaming</div><div class="s"><b>N</b> req → <b>1</b> resp</div></div>
+      <div class="card" data-k="bidi"><div class="t">④ Bidirectional</div><div class="s"><b>N</b> req ⇄ <b>N</b> resp</div></div>
+    </div>
+
+    <details>
+      <summary>Why gRPC and not plain REST + JSON?</summary>
+      <div class="body">
+        <p><b>Binary, not text.</b> Protobuf is far smaller and faster to encode/decode than JSON — no field names on the wire, numbers instead of text.</p>
+        <p><b>A real contract.</b> The <code>.proto</code> is typed and versioned. Client and server can't silently disagree about the shape of data; the compiler enforces it. Adding a field stays <span class="he" title="תאימות לאחור — שינוי בסכמה שלא שובר קוד ישן שעדיין עובד מולה">backward compatible</span>.</p>
+        <p><b>Streaming &amp; multiplexing for free.</b> Riding <span class="he" title="HTTP/2 — מאפשר כמה זרמים במקביל על חיבור אחד">HTTP/2</span> means built-in <span class="he" title="ריבוב — הרצת כמה קריאות במקביל על אותו חיבור TCP יחיד, בלי לפתוח חיבור לכל אחת">multiplexing</span> and long-lived <span class="he" title="זרם — רצף הודעות שזורם בהדרגה לאורך זמן על אותו חיבור">streams</span> in both directions.</p>
+        <p><b>The trade-off:</b> it's binary, so you can't just read it with <code>curl</code>, and browsers can't speak raw gRPC (they need gRPC-Web + a proxy). For service-to-service traffic, that's a fine price.</p>
+      </div>
+    </details>
+  </div>
+
+  <div class="right">
+    <h2>The wire — one call over HTTP/2 · click any colored part</h2>
+    <div class="wire" id="reqw"><span class="cm">─ HEADERS frame (the request opens an HTTP/2 stream) ─</span>
+<span class="tok t-hname" data-k="hmethod">:method:</span> <span class="t-hval">POST</span>          <span class="cm">gRPC is always POST</span>
+<span class="tok t-hname" data-k="hpath">:path:</span> <span class="t-hval">/Greeter/SayHello</span>
+<span class="tok t-hname" data-k="hct">content-type:</span> <span class="t-hval">application/grpc</span>
+<span class="tok t-hname" data-k="hte">te:</span> <span class="t-hval">trailers</span>
+<span class="tok t-hname" data-k="henc">grpc-encoding:</span> <span class="t-hval">identity</span>
+<span class="cm">─ DATA frame (the length-prefixed message) ─</span>
+<span class="tok t-num" data-k="cflag">00</span>            <span class="cm">compressed? 0 = no</span>
+<span class="tok t-num" data-k="length">00 00 00 08</span>    <span class="cm">message length = 8 bytes</span>
+<span class="tok t-body" data-k="proto-bytes">0A 06 6D 61 61 79 61 6E</span>   <span class="cm">the protobuf payload ↓</span>
+<span class="cm">─ trailers (a HEADERS frame sent at the very end) ─</span>
+<span class="tok t-hname" data-k="status">grpc-status:</span> <span class="t-hval">0</span>           <span class="cm">0 = OK</span>
+<span class="tok t-hname" data-k="gmsg">grpc-message:</span> <span class="t-hval"></span></div>
+
+    <div class="info" id="info2">
+      <h3>The whole call is one HTTP/2 stream</h3>
+      Headers open it, one or more <span class="hl">DATA frames</span> carry the
+      <span class="he" title="מסגור — חלוקת הזרם ליחידות מידע ברורות עם תחילה וסוף מוגדרים">length-prefixed</span> messages, and a final
+      <span class="he" title="כותרות-סיום — כותרות שנשלחות בסוף ההודעה (אחרי הגוף); gRPC מוסר בהן את סטטוס הסיום של הקריאה">trailers</span>
+      block carries the result code. The status lives at the <span class="hl">end</span>, not the start — because the server may only know it failed after streaming a while.
+    </div>
+
+    <table><tbody>
+      <tr><td class="grp" colspan="2">Key gRPC headers</td></tr>
+      <tr><td class="h">:path</td><td class="d">/<span class="he" title="חבילה — מרחב-שם שמקבץ שירותים, נגזר מה-proto">package</span>.Service/Method — the routing</td></tr>
+      <tr><td class="h">content-type</td><td class="d">application/grpc[+proto] — marks it gRPC</td></tr>
+      <tr><td class="h">te: trailers</td><td class="d">client accepts trailing headers</td></tr>
+      <tr><td class="h">grpc-encoding</td><td class="d">message <span class="he" title="דחיסה — כיווץ ההודעה כדי שתעבור מהר יותר ברשת">compression</span> (gzip / identity)</td></tr>
+      <tr><td class="h">grpc-timeout</td><td class="d">deadline, e.g. 100m = 100 ms</td></tr>
+      <tr><td class="h">grpc-status</td><td class="d">final code (trailer). 0 = OK</td></tr>
+      <tr><td class="h">grpc-message</td><td class="d">human error text (trailer)</td></tr>
+    </tbody></table>
+  </div>
+</div>
+
+<section class="bytesec">
+  <h2>The payload, byte by byte — <code>HelloRequest{ name: "maayan" }</code> · click any byte</h2>
+  <div class="bytegrid">
+    <div>
+      <div class="bytes" id="bytes"><span class="byte b-tag" data-k="b-tag">0A</span> <span class="byte b-len" data-k="b-len">06</span> <span class="byte b-data" data-k="b-data">6D</span> <span class="byte b-data" data-k="b-data">61</span> <span class="byte b-data" data-k="b-data">61</span> <span class="byte b-data" data-k="b-data">79</span> <span class="byte b-data" data-k="b-data">61</span> <span class="byte b-data" data-k="b-data">6E</span></div>
+      <div class="bytelegend"><span class="b-tag">■ tag</span><span class="b-len">■ length</span><span class="b-data">■ "maayan" (UTF-8)</span></div>
+    </div>
+    <div class="info" id="byteinfo">
+      <h3>Click any byte</h3>
+      Just <span class="hl">8 bytes</span> carry the whole message — no field names, no quotes, no braces. That's the protobuf trick: the <code>.proto</code> already told both sides that field <code>1</code> is a string called <code>name</code>, so the wire only needs the field <span class="he" title="תג שדה — מספר הזיהוי של השדה, שמקודד בבית אחד יחד עם סוג הקידוד שלו">tag</span>, a length, and the raw bytes.
+    </div>
+  </div>
+</section>
+
+<footer>gRPC = <span class="he" title="קריאה לפרוצדורה מרוחקת — להפעיל פונקציה במחשב אחר כאילו היא מקומית">RPC</span> over <span class="he" title="HTTP/2 — מרבב כמה זרמים על חיבור אחד">HTTP/2</span>, with <span class="he" title="Protocol Buffers — קידוד בינארי דחוס מונחה-סכמה">Protocol Buffers</span> as the encoding. The bytes shown are exactly what a real Greeter service sends; the byte values are a genuine protobuf encoding of <code>name:"maayan"</code>.</footer>
+
+<script>
+const INFO={
+  syntax:{h:'syntax = "proto3"',b:"Declares the protobuf language version. <code>proto3</code> is the current one — every field is optional with sensible defaults, and the encoding rules below are its rules.",cap:"the .proto — line 1"},
+  service:{h:"service Greeter",b:"A <span class='hl'>service</span> is a named group of remote methods — it becomes a class on the client and an interface to implement on the server. <code>Greeter</code> is its name; it shows up in the <code>:path</code> on the wire.",cap:"the remote API surface"},
+  svc:{h:"the service name",b:"<code>Greeter</code> — this exact name is used to route the call: the request's <code>:path</code> is <code>/Greeter/SayHello</code>. Change the name here and the routing path changes.",cap:"used in the :path"},
+  rpc:{h:"rpc — one remote method",b:"Each <code>rpc</code> line declares one callable method: its name, its <span class='hl'>request</span> message type, and its <span class='hl'>response</span> message type. This is the unary shape (one in, one out); add <code>stream</code> before a type to make it a stream.",cap:"a callable method"},
+  method:{h:"SayHello — the method",b:"The method name. On the wire the call goes to <code>:path: /Greeter/SayHello</code> — service then method. The generated client exposes it as <code>greeter.SayHello(request)</code>.",cap:"becomes /Greeter/SayHello"},
+  message:{h:"message — a typed record",b:"A <code>message</code> is a structured record — the unit protobuf serializes. It's just a set of typed, <span class='hl'>numbered</span> fields. Messages can nest and reference each other.",cap:"the data shape"},
+  msg:{h:"HelloRequest",b:"The request type for <code>SayHello</code>. Here it has a single field, <code>name</code>. The server receives a fully-typed <code>HelloRequest</code> object — no manual parsing.",cap:"the request message"},
+  field:{h:'string name = 1',b:"A field has a <span class='hl'>type</span> (<code>string</code>), a <span class='hl'>name</span> (<code>name</code>), and a <span class='hl'>field number</span> (<code>= 1</code>). The number is NOT a value — it's the field's permanent ID on the wire. <b>Never reuse or renumber it</b>, or old and new code will misread each other's bytes.",cap:"type · name · field number"}
+};
+const RPC={
+  unary:{h:"① Unary RPC",b:"The classic shape: client sends <span class='hl'>one</span> request, server returns <span class='hl'>one</span> response — like a normal function call. Most APIs are unary. <code>rpc SayHello(Req) returns (Resp)</code>.",cap:"1 request → 1 response"},
+  sstream:{h:"② Server streaming",b:"Client sends one request; the server streams back <span class='hl'>many</span> responses on the same stream, then closes. Great for feeds, search results, or progress updates. <code>returns (stream Resp)</code>.",cap:"1 request → N responses"},
+  cstream:{h:"③ Client streaming",b:"Client streams <span class='hl'>many</span> messages up (e.g. uploading chunks or metrics), and the server replies <span class='hl'>once</span> at the end. <code>rpc Upload(stream Chunk) returns (Summary)</code>.",cap:"N requests → 1 response"},
+  bidi:{h:"④ Bidirectional streaming",b:"Both sides stream independently over the <span class='hl'>same</span> connection at the same time — neither waits for the other. Chat, live sync, games. <code>rpc Chat(stream Msg) returns (stream Msg)</code>. HTTP/2 makes this natural.",cap:"N requests ⇄ N responses"}
+};
+const WIRE={
+  hmethod:{h:":method: POST",b:"An HTTP/2 <span class='hl'>pseudo-header</span> (the leading colon marks it). gRPC calls are <span class='hl'>always POST</span> — the request body carries the message bytes, even for read-only calls.",cap:"HTTP/2 request header"},
+  hpath:{h:":path: /Greeter/SayHello",b:"The routing target: <code>/Service/Method</code> (with the package prefix if any). This is how the server knows which method to dispatch — it's derived straight from your <code>.proto</code>.",cap:"service & method routing"},
+  hct:{h:"content-type: application/grpc",b:"Marks the body as gRPC framing. The full form is <code>application/grpc+proto</code> (protobuf) — other codecs exist (<code>+json</code>). A proxy that sees this knows not to treat the body as text.",cap:"identifies the protocol"},
+  hte:{h:"te: trailers",b:"Tells the server the client accepts <span class='hl'>trailers</span> — HTTP headers sent <em>after</em> the body. gRPC needs them: the final <code>grpc-status</code> arrives as a trailer once the response is done.",cap:"required for the status trailer"},
+  henc:{h:"grpc-encoding: identity",b:"Which compression the message bytes use. <code>identity</code> = none; <code>gzip</code> = compressed. It pairs with the <span class='hl'>compressed flag</span> byte in each message frame below.",cap:"per-message compression"},
+  cflag:{h:"the compressed flag (1 byte)",b:"Every message is framed as <code>[1-byte flag][4-byte length][bytes]</code>. This first byte is the flag: <code>00</code> = not compressed, <code>01</code> = compressed with the <code>grpc-encoding</code> codec. Here it's <code>00</code>.",cap:"byte 1 of the frame"},
+  length:{h:"the length prefix (4 bytes)",b:"A <span class='hl'>big-endian</span> 32-bit length of the message that follows — <code>00 00 00 08</code> = 8 bytes. The reader knows exactly how many bytes to consume, so many messages can pack into one stream unambiguously.",cap:"bytes 2–5, big-endian"},
+  "proto-bytes":{h:"the protobuf payload (8 bytes)",b:"The serialized message: <code>0A 06 6D 61 61 79 61 6E</code>. This is the <code>HelloRequest{name:\"maayan\"}</code> — broken down byte by byte in the section below. Click any byte there.",cap:"the message itself"},
+  status:{h:"grpc-status: 0",b:"The real result code, sent as a <span class='hl'>trailer</span> at the very end. <code>0</code> = OK. Non-zero is an error (e.g. <code>5</code> NOT_FOUND, <code>16</code> UNAUTHENTICATED). HTTP status is almost always 200 even when the RPC fails — the truth is here.",cap:"final status (trailer)"},
+  gmsg:{h:"grpc-message",b:"A human-readable error description, paired with a non-zero <code>grpc-status</code>. Empty on success. Also a trailer.",cap:"error text (trailer)"}
+};
+const BYTE={
+  "b-tag":{h:"0A — the field tag",b:"One byte encodes <span class='hl'>two</span> things: the field number and its wire type. <code>0x0A = 0000 1010</code>. The low 3 bits (<code>010</code> = 2) are the <span class='hl'>wire type</span> — 2 means length-delimited (strings, bytes, sub-messages). The rest (<code>0000 1</code> = 1) is the <span class='hl'>field number</span> — field <code>1</code>, which the .proto calls <code>name</code>. Formula: <code>(field_number &lt;&lt; 3) | wire_type</code>.",cap:"field 1, wire type 2"},
+  "b-len":{h:"06 — the length",b:"Because the field is length-delimited, its value is prefixed by a length: <code>0x06</code> = 6 bytes follow. A short string like this fits the length in one <span class='he' title='varint — קידוד מספר באורך משתנה: מספרים קטנים תופסים פחות בתים'>varint</span> byte.",cap:"the value is 6 bytes long"},
+  "b-data":{h:'6D 61 61 79 61 6E — "maayan"',b:"The raw UTF-8 bytes of the string value: <code>6D</code>=m, <code>61</code>=a, <code>61</code>=a, <code>79</code>=y, <code>61</code>=a, <code>6E</code>=n. No quotes, no field name — the tag and length already said everything else.",cap:"the string content, UTF-8"}
+};
+
+function makePanel(id){const el=document.getElementById(id);return d=>{el.innerHTML='<h3>'+d.h+'</h3>'+d.b+(d.cap?'<div class="cap">'+d.cap+'</div>':'');annotate(el);};}
+function wireUp(sel,map,panelId,clearWith){
+  const panel=makePanel(panelId);
+  const nodes=[...document.querySelectorAll(sel)];
+  nodes.forEach(n=>n.addEventListener('click',()=>{
+    (clearWith||nodes).forEach(x=>x.classList.remove('active'));n.classList.add('active');
+    panel(map[n.dataset.k]);
+  }));
+  return nodes;
+}
+// proto tokens + RPC cards share the left #info panel
+const protoNodes=wireUp('#proto .tok',INFO,'info');
+const cardNodes=wireUp('#cards .card',RPC,'info');
+// make proto + cards clear each other's highlight
+const leftAll=[...protoNodes,...cardNodes];
+leftAll.forEach(n=>n.addEventListener('click',()=>leftAll.forEach(x=>{if(x!==n)x.classList.remove('active')})));
+// wire tokens → #info2 ; bytes → #byteinfo
+wireUp('#reqw .tok',WIRE,'info2');
+wireUp('#bytes .byte',BYTE,'byteinfo');
+
+// ---- hover/tap-for-Hebrew glossary -----------------------------------
+const GLOSS={
+  rpc:"קריאה לפרוצדורה מרוחקת (RPC) — הפעלת פונקציה שרצה על מחשב אחר, כאילו קראת לפונקציה רגילה אצלך",
+  protobuf:"Protocol Buffers — פורמט בינארי דחוס וסכמה לתיאור מבני נתונים; gRPC מקודד בו את ההודעות",
+  "protocol buffers":"Protocol Buffers — פורמט בינארי דחוס מונחה-סכמה לקידוד הודעות",
+  serialization:"סריאליזציה — הפיכת אובייקט שבזיכרון לרצף בתים שאפשר לשלוח ברשת",
+  serialize:"לקודד אובייקט שבזיכרון לרצף בתים לשליחה ברשת",
+  deserialize:"לפענח את רצף הבתים שהתקבל ולהפוך אותו חזרה לאובייקט בזיכרון",
+  schema:"סכמה — הגדרה פורמלית של מבנה הנתונים: אילו שדות קיימים ומאיזה סוג",
+  stub:"stub — קוד שנוצר אוטומטית מקובץ ה-proto, שעוטף את התקשורת כך שקריאה מרוחקת נראית כקריאה מקומית",
+  streaming:"זרם — רצף הודעות שזורם בהדרגה לאורך זמן על אותו חיבור, במקום הודעה בודדת",
+  stream:"זרם — רצף הודעות שזורם בהדרגה על אותו חיבור",
+  streams:"זרמים — כמה רצפי הודעות שזורמים על החיבור",
+  unary:"קריאה בודדת — בקשה אחת ותשובה אחת (לעומת זרמים מרובי-הודעות)",
+  bidirectional:"דו-כיווני — שני הצדדים שולחים זרם הודעות בו-זמנית על אותו חיבור",
+  multiplexing:"ריבוב — הרצת כמה קריאות במקביל על אותו חיבור TCP יחיד, בלי לפתוח חיבור לכל אחת",
+  multiplex:"ריבוב — שילוב כמה זרמי תקשורת על חיבור פיזי אחד",
+  "http/2":"HTTP/2 — גרסת HTTP בינארית שמרבבת כמה זרמים במקביל על חיבור TCP אחד",
+  varint:"varint — קידוד מספר באורך משתנה: מספרים קטנים תופסים פחות בתים",
+  binary:"בינארי — נתונים גולמיים (בתים), לא טקסט קריא לבני אדם כמו JSON",
+  trailer:"כותרת-סיום — כותרת שנשלחת בסוף ההודעה (אחרי הגוף)",
+  trailers:"כותרות-סיום — כותרות שנשלחות בסוף ההודעה; gRPC מוסר בהן את סטטוס הסיום",
+  framing:"מסגור — חלוקת הזרם ליחידות מידע ברורות עם תחילה וסוף מוגדרים",
+  "length-prefixed":"קידום-אורך — לפני כל הודעה נשלח מספר שמציין כמה בתים יש בה, כדי לדעת היכן היא נגמרת",
+  tag:"תג שדה — מספר הזיהוי של השדה, שמקודד בבית אחד יחד עם סוג הקידוד שלו",
+  "field number":"מספר שדה — מזהה קבוע של שדה בהודעה; הוא שנשלח ברשת, לא שם השדה",
+  "wire type":"סוג קידוד — מציין כיצד הערך מקודד בבתים (מספר/אורך-קבוע/אורך-משתנה)",
+  channel:"ערוץ — חיבור לוגי לשרת gRPC שדרכו עוברות כל הקריאות",
+  idl:"IDL — שפת תיאור ממשק: שפה ניטרלית לתיאור השירות וההודעות, שממנה נוצר קוד",
+  "backward compatible":"תאימות לאחור — שינוי בסכמה שלא שובר קוד ישן שעדיין עובד מולה",
+  payload:"המטען — הנתונים השימושיים עצמם בתוך ההודעה",
+  compression:"דחיסה — כיווץ ההודעה כדי שתעבור מהר יותר ברשת",
+  package:"חבילה — מרחב-שם שמקבץ שירותים והודעות, נגזר מקובץ ה-proto",
+  client:"לקוח — הצד שיוזם את הקריאה",
+  server:"שרת — הצד שמקבל את הקריאה ומחזיר תשובה",
+  protocol:"פרוטוקול — מערכת הכללים המוסכמת ששני הצדדים מדברים לפיה"
+};
+const _keys=Object.keys(GLOSS).sort((a,b)=>b.length-a.length).map(k=>k.replace(/[-/]/g,'\\$&'));
+const GLOSS_RE=new RegExp('(?<![\\w-])('+_keys.join('|')+')(?![\\w-])','gi');
+const _SKIP=new Set(['PRE','SCRIPT','STYLE','BUTTON','TD','TH']);
+function annotate(root){
+  if(!root) return;
+  const tw=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode(n){
+    if(!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+    for(let p=n.parentElement;p&&p!==root.parentElement;p=p.parentElement)
+      if(_SKIP.has(p.tagName)||(p.classList&&(p.classList.contains('he')||p.classList.contains('wire')||p.classList.contains('bytes')))) return NodeFilter.FILTER_REJECT;
+    return new RegExp(GLOSS_RE.source,'i').test(n.nodeValue)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT;
+  }});
+  const todo=[]; for(let n;n=tw.nextNode();) todo.push(n);
+  todo.forEach(node=>{
+    const s=node.nodeValue, frag=document.createDocumentFragment(); let last=0,m; GLOSS_RE.lastIndex=0;
+    while(m=GLOSS_RE.exec(s)){
+      if(m.index>last) frag.appendChild(document.createTextNode(s.slice(last,m.index)));
+      const sp=document.createElement('span'); sp.className='he';
+      const he=GLOSS[m[0].toLowerCase()]; sp.title=he; sp.dataset.he=he; sp.textContent=m[0];
+      frag.appendChild(sp); last=m.index+m[0].length;
+    }
+    if(last<s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+    node.parentNode.replaceChild(frag,node);
+  });
+}
+[document.querySelector('header p'), document.getElementById('info'), document.getElementById('info2'),
+ document.getElementById('byteinfo'), document.querySelector('footer'),
+ ...document.querySelectorAll('details .body'), ...document.querySelectorAll('table .d')].forEach(annotate);
+
+// custom Hebrew tooltip — hover AND tap
+const hepop=document.createElement('div'); hepop.className='hepop'; document.body.appendChild(hepop);
+let heCur=null;
+function showHe(el){
+  if(heCur) heCur.classList.remove('he-on');
+  heCur=el; el.classList.add('he-on');
+  hepop.textContent=el.dataset.he||el.title;
+  hepop.classList.add('on');
+  const r=el.getBoundingClientRect(), ph=hepop.offsetHeight;
+  const cx=Math.max(150,Math.min(r.left+r.width/2,window.innerWidth-150));
+  hepop.style.left=cx+'px';
+  if(r.top>ph+14){
+    hepop.classList.remove('below');
+    hepop.style.top=(r.top-8)+'px'; hepop.style.transform='translate(-50%,-100%)';
+  }else{
+    hepop.classList.add('below');
+    hepop.style.top=(r.bottom+8)+'px'; hepop.style.transform='translate(-50%,0)';
+  }
+}
+function hideHe(){ hepop.classList.remove('on'); if(heCur){heCur.classList.remove('he-on');heCur=null;} }
+document.addEventListener('mouseover',e=>{const el=e.target.closest('.he'); if(el) showHe(el);});
+document.addEventListener('mouseout', e=>{if(e.target.closest('.he')) hideHe();});
+document.addEventListener('click',    e=>{const el=e.target.closest('.he'); if(el){e.stopPropagation(); showHe(el);} else hideHe();});
+window.addEventListener('scroll',hideHe,true);
+</script>
+</body>
+</html>
