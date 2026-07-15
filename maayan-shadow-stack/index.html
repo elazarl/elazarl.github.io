@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Shadow Stack — stop return-address hijacking, one register at a time</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pur:#bc8cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}
+  header{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 4px;font-size:22px}
+  header p{margin:0 0 6px;color:var(--dim);max-width:92ch}
+  header code{font-family:var(--mono);color:var(--pur);font-size:13px}
+  .wrap{display:grid;grid-template-columns:1.15fr 1fr;gap:0;min-height:calc(100vh - 120px)}
+  .left{padding:20px 24px;border-right:1px solid var(--line)}
+  .right{padding:20px 24px;display:flex;flex-direction:column;gap:14px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 12px}
+  /* ── assembly listing ── */
+  .asm{background:#010409;border:1px solid var(--line);border-radius:10px;padding:12px 0;
+       font-family:var(--mono);font-size:12.5px;line-height:1.7;overflow-x:auto}
+  .asm .ln{display:block;padding:1px 14px 1px 12px;white-space:pre;border-left:3px solid transparent}
+  .asm .ln.cur{background:rgba(88,166,255,.14);border-left-color:var(--acc)}
+  .asm .ln.instr:hover{background:rgba(139,148,158,.10)}
+  .asm .lbl{color:var(--pur)}
+  .asm .op{color:#ff7b72}
+  .asm .cm{color:var(--dim)}
+  .asm .reg{color:var(--acc)}
+  .asm .num{color:var(--ok)}
+  .asm .sh{color:var(--warn)}      /* shadow-stack instrumentation */
+  .asm .ln.shrow{background:rgba(210,153,34,.06)}
+  /* ── controls ── */
+  .ctrl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:14px 0 4px}
+  button{font:600 13px/1 system-ui;background:var(--panel);color:var(--ink);border:1px solid var(--line);
+         border-radius:8px;padding:9px 14px;cursor:pointer;transition:.12s}
+  button:hover{border-color:var(--acc);color:var(--acc)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:var(--acc);color:#04121f;border-color:var(--acc)}
+  button.primary:hover{filter:brightness(1.1);color:#04121f}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg button{border:0;border-radius:0;background:transparent}
+  .seg button.on{background:var(--acc);color:#04121f}
+  .seg button.on.bad{background:var(--bad);color:#1a0000}
+  .toggle{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--dim)}
+  .toggle input{accent-color:var(--warn);width:16px;height:16px}
+  /* ── register panel ── */
+  .regs{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 14px;background:var(--panel);
+        border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-family:var(--mono);font-size:12.5px}
+  .regs div{display:flex;justify-content:space-between}
+  .regs .k{color:var(--dim)} .regs .v{color:var(--ink)}
+  .regs .v.chg{color:var(--warn);font-weight:700}
+  .regs .flag.set{color:var(--ok)} .regs .flag.unset{color:var(--dim)}
+  /* ── stacks ── */
+  .stacks{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .stackbox h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)}
+  .cells{display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:12px}
+  .cell{border:1px solid var(--line);border-radius:7px;padding:6px 9px;background:#010409;
+        display:flex;justify-content:space-between;gap:8px;transition:.15s}
+  .cell .addr{color:var(--dim)}
+  .cell .name{color:var(--ink)}
+  .cell.retn{border-color:var(--acc)}
+  .cell.retn .name{color:var(--acc)}
+  .cell.corrupt{border-color:var(--bad);background:rgba(248,81,73,.10)}
+  .cell.corrupt .name{color:var(--bad)}
+  .cell.shadow{border-color:var(--warn)}
+  .cell.shadow .name{color:var(--warn)}
+  .cell.sp{outline:2px solid var(--pur);outline-offset:-2px}
+  .cell .sptag{color:var(--pur);font-size:10px}
+  .cell.empty{opacity:.35}
+  /* ── explanation / verdict ── */
+  .info{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc);
+        border-radius:8px;padding:13px 15px;font-size:13.5px;color:var(--dim);min-height:64px}
+  .info h3{margin:0 0 6px;color:var(--ink);font-size:14px}
+  .info code{font-family:var(--mono);color:var(--pur);font-size:12.5px}
+  .info .hl{color:var(--ink)}
+  .verdict{border-radius:8px;padding:12px 15px;font-size:14px;font-weight:600;display:none}
+  .verdict.show{display:block}
+  .verdict.pwned{background:rgba(248,81,73,.12);border:1px solid var(--bad);color:var(--bad)}
+  .verdict.safe{background:rgba(63,185,80,.12);border:1px solid var(--ok);color:var(--ok)}
+  .verdict.done{background:rgba(88,166,255,.10);border:1px solid var(--acc);color:var(--acc)}
+  .verdict small{display:block;font-weight:400;color:var(--dim);margin-top:4px}
+  /* ── prose sections ── */
+  section.prose{padding:26px 28px;border-top:1px solid var(--line);max-width:100ch}
+  section.prose h2{font-size:16px;text-transform:none;letter-spacing:0;color:var(--ink);margin:0 0 10px}
+  section.prose p{color:var(--dim);margin:0 0 12px}
+  section.prose code{font-family:var(--mono);color:var(--pur);font-size:12.5px;
+    background:#010409;border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+  pre.block{background:#010409;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow-x:auto;color:var(--ink);margin:0 0 12px}
+  pre.block .c{color:var(--dim)} pre.block .k{color:#ff7b72} pre.block .s{color:var(--warn)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}.left{border-right:0;border-bottom:1px solid var(--line)}.grid2{grid-template-columns:1fr}}
+  footer{padding:14px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+  a{color:var(--acc)}
+  /* hover/tap-for-Hebrew glossary words */
+  .he{border-bottom:1px dotted var(--warn);cursor:help}
+  .he:hover,.he.he-on{color:var(--warn);background:rgba(210,153,34,.15)}
+  .hepop{position:fixed;z-index:60;display:none;direction:rtl;background:var(--warn);color:#1a1400;
+    font:600 13px/1.45 system-ui,sans-serif;padding:7px 11px;border-radius:8px;max-width:280px;
+    pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.45)}
+  .hepop.on{display:block}
+</style>
+</head>
+<body>
+<header>
+  <h1>Shadow Stack — catching return-address hijacking</h1>
+  <p>A function's <span class="he" data-he="כתובת חזרה — לאן ה־ret קופץ בסיום הפונקציה">return address</span> lives on the same stack as its local buffers. Overflow a buffer and you overwrite that address — the classic <span class="he" data-he="גלישת חוצץ — כתיבה מעבר לגבול המערך על המחסנית">stack&nbsp;buffer&nbsp;overflow</span>. A <span class="he" data-he="מחסנית צל — עותק מוגן ונפרד של כתובות החזרה">shadow&nbsp;stack</span> keeps a second, separate copy of every return address and checks it before returning. Below is the whole idea in <code>~10</code> lines of real x86-64 — step through it, then flip on the attack.</p>
+</header>
+
+<div class="wrap">
+  <!-- LEFT: assembly + controls + registers -->
+  <div class="left">
+    <h2>greet() — instrumented x86-64 (AT&amp;T)</h2>
+    <div class="asm" id="asm"></div>
+
+    <div class="ctrl">
+      <button id="step" class="primary">Step ▸</button>
+      <button id="run">Run ⏩</button>
+      <button id="reset">↺ Reset</button>
+      <div class="seg" id="scenario" style="margin-left:auto">
+        <button data-s="normal" class="on">Normal input</button>
+        <button data-s="attack">Attack input</button>
+      </div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="shield" checked />
+      shadow-stack check enabled (uncheck to see the machine get pwned)
+    </label>
+
+    <h2 style="margin-top:18px">Registers &amp; flags</h2>
+    <div class="regs" id="regs"></div>
+  </div>
+
+  <!-- RIGHT: stacks + explanation -->
+  <div class="right">
+    <div class="stacks">
+      <div class="stackbox">
+        <h3>Main stack <span style="color:var(--pur)">(rsp)</span></h3>
+        <div class="cells" id="mainstack"></div>
+      </div>
+      <div class="stackbox">
+        <h3>Shadow stack <span style="color:var(--warn)">(r15)</span></h3>
+        <div class="cells" id="shadowstack"></div>
+      </div>
+    </div>
+    <div class="info" id="info"><h3>Ready.</h3>Press <span class="hl">Step ▸</span> to execute one instruction. The <span class="hl">main stack</span> is where the attacker writes; the <span class="hl">shadow stack</span> is the trusted copy the CPU compares against on <code>ret</code>.</div>
+    <div class="verdict" id="verdict"></div>
+  </div>
+</div>
+
+<section class="prose">
+  <div class="grid2">
+    <div>
+      <h2>1 · The simplest possible defense</h2>
+      <p>You don't need CPU support. Reserve one callee-saved register as a <b>shadow stack pointer</b> — here <code>%r15</code> — pointing into a separate memory region the overflow can't reach. Two snippets do everything:</p>
+      <p><b>Prologue</b> (right after entry, the <code>call</code> already pushed the return address to <code>[rsp]</code>):</p>
+      <pre class="block"><span class="c"># copy the real return address into the shadow region</span>
+<span class="k">mov</span>  (%rsp), %rax
+<span class="k">sub</span>  $8, %r15
+<span class="k">mov</span>  %rax, (%r15)     <span class="c"># trusted copy — attacker can't see r15's region</span></pre>
+      <p><b>Epilogue</b> (replace the bare <code>ret</code>):</p>
+      <pre class="block"><span class="k">mov</span>  (%rsp), %rax     <span class="c"># what's on the main stack now (maybe corrupted)</span>
+<span class="k">mov</span>  (%r15), %rcx     <span class="c"># what we saved (trusted)</span>
+<span class="k">add</span>  $8, %r15
+<span class="k">cmp</span>  %rcx, %rax
+<span class="k">jne</span>  __ss_abort       <span class="c"># mismatch ⇒ someone rewrote the return address</span>
+<span class="k">ret</span></pre>
+      <p>That's a software shadow stack. Compilers automate it (<code>-fsanitize=shadow-call-stack</code> on ARM64, <code>-mshstk</code> + Intel CET hardware on x86), but the mechanism is exactly these lines.</p>
+    </div>
+    <div>
+      <h2>2 · Compile &amp; run it yourself</h2>
+      <p>The listing on the left is real. Save the full program and run it — the normal path prints <code>hello</code>, the attack path either spawns a fake "shell" (shield off) or aborts (shield on).</p>
+      <pre class="block"><span class="c"># download the two files, then:</span>
+gcc -no-pie -fno-stack-protector \
+    -o demo demo.S runner.c
+./demo AAAAAAAA              <span class="c"># normal → greets you</span>
+./demo AAAAAAAAAAAAAAAAAAAAAAAABBBBBBBB   <span class="c"># attack</span></pre>
+      <p><code>-fno-stack-protector</code> is required so the compiler's own <span class="he" data-he="עוגן/כלב-שמירה — ערך אקראי שהמהדר שם לפני כתובת החזרה">canary</span> doesn't steal the show — we want to watch the <em>shadow stack</em> catch it. <code>-no-pie</code> keeps addresses fixed so the demo is reproducible.</p>
+      <h2 style="margin-top:20px">3 · Why the shadow copy is safe</h2>
+      <p>The overflow walks <em>upward</em> from a local buffer through saved registers into the return slot — all on the main stack. The shadow region sits at a completely different address held only in <code>%r15</code>, which never gets spilled to the vulnerable frame. The attacker can smash <code>[rsp]</code> all day; <code>(%r15)</code> still holds the truth, and <code>cmp</code> notices the two disagree.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  Part of the <a href="https://elazarl.github.io/">maayan</a> explainer series · hover the <span class="he" data-he="מילון — ריחוף חושף את המונח בעברית">dotted words</span> for Hebrew · software shadow stack demo, x86-64
+</footer>
+
+<div class="hepop" id="hepop"></div>
+
+<script>
+"use strict";
+/* ─────────────────────────────────────────────────────────────
+   A tiny, honest interpreter for exactly the instructions used.
+   Not a full x86 emulator (ponytail: curated instruction set,
+   extend only if the demo grows). Each program step mutates
+   state and returns a human description; the UI replays them.
+   ───────────────────────────────────────────────────────────── */
+
+const WIN = 0x401180;     // address of the attacker's target ("shell") function
+const RET = 0x401142;     // the legitimate return address inside main()
+
+// The instrumented listing. `sh:true` marks shadow-stack instrumentation.
+// `k` is a key used to drive the interpreter; text is what we render.
+const PROG = [
+  {t:'greet:',                          lbl:true},
+  {t:'  <span class="cm"># call already pushed return addr to (%rsp)</span>', k:'entry'},
+  {t:'  <span class="sh op">mov</span>  <span class="sh">(%rsp), %rax</span>',     k:'sh_load_ret',  sh:true},
+  {t:'  <span class="sh op">sub</span>  <span class="sh">$8, %r15</span>',          k:'sh_bump',      sh:true},
+  {t:'  <span class="sh op">mov</span>  <span class="sh">%rax, (%r15)</span>',      k:'sh_store',     sh:true},
+  {t:'  <span class="op">lea</span>  <span class="reg">-8(%rsp), %rdi</span>   <span class="cm"># char buf[8]</span>', k:'lea_buf'},
+  {t:'  <span class="op">call</span> <span class="reg">strcpy</span>          <span class="cm"># copy attacker input → buf</span>', k:'strcpy'},
+  {t:'  <span class="cm"># ... use the name (prints "hello, ...") ...</span>', k:'use'},
+  {t:'  <span class="sh op">mov</span>  <span class="sh">(%rsp), %rax</span>     <span class="cm"># return addr NOW</span>', k:'ep_load_main', sh:true},
+  {t:'  <span class="sh op">mov</span>  <span class="sh">(%r15), %rcx</span>     <span class="cm"># trusted copy</span>', k:'ep_load_sh', sh:true},
+  {t:'  <span class="sh op">add</span>  <span class="sh">$8, %r15</span>',          k:'ep_pop_sh', sh:true},
+  {t:'  <span class="sh op">cmp</span>  <span class="sh">%rcx, %rax</span>',        k:'ep_cmp', sh:true},
+  {t:'  <span class="sh op">jne</span>  <span class="sh">__ss_abort</span>       <span class="cm"># caught!</span>', k:'ep_jne', sh:true},
+  {t:'  <span class="op">ret</span>',                        k:'ret'},
+];
+
+const hex = n => '0x'+(n>>>0).toString(16).padStart(6,'0');
+
+let S, log, ip;   // state, step log (frames), instruction pointer within PROG
+
+function fresh(){
+  const scenario = document.querySelector('#scenario .on').dataset.s;
+  const shield   = document.getElementById('shield').checked;
+  return {
+    scenario, shield,
+    regs:{rax:0, rcx:0, rsp:0x7fff20, r15:0x602020, rip:0x401140},
+    zf:null,
+    // main stack: cells from high addr (bottom) to low (top). name/tag per cell.
+    main:[
+      {addr:0x7fff28, name:hex(RET),  role:'ret'},   // return address (call pushed it)
+      {addr:0x7fff20, name:'saved rbp', role:'rbp'},
+      {addr:0x7fff18, name:'buf[0..7]', role:'buf'},
+    ],
+    shadow:[],   // grows as we push
+    aborted:false, pwned:false, finished:false,
+  };
+}
+
+// Build the whole frame list by "executing" the program once.
+function build(){
+  const st = fresh();
+  const frames = [];
+  const snap = (line, info) => frames.push({
+    line, info,
+    regs:{...st.regs}, zf:st.zf,
+    main: st.main.map(c=>({...c})),
+    shadow: st.shadow.map(c=>({...c})),
+    aborted:st.aborted, pwned:st.pwned, finished:st.finished,
+  });
+
+  const chg = new Set();   // which regs changed on this step (for highlight)
+  for(let i=0;i<PROG.length;i++){
+    const step = PROG[i];
+    if(step.lbl){ continue; }
+    if(step.sh && !st.shield) continue;   // skip shadow instrumentation when shield off
+    const k = step.k;
+    let info = '';
+
+    if(k==='entry'){
+      st.regs.rsp = 0x7fff28;
+      info = 'On entry, the <code>call</code> in main() already pushed the <span class="hl">return address</span> '+hex(RET)+' onto the main stack at <code>(%rsp)</code>. This is what an overflow will target.';
+    }
+    else if(k==='sh_load_ret'){
+      st.regs.rax = RET;
+      info = 'Read the real return address off the main stack into <code>%rax</code> so we can stash a private copy.';
+    }
+    else if(k==='sh_bump'){
+      st.regs.r15 -= 8;
+      info = 'Grow the shadow stack downward by one slot (<code>%r15</code> is our shadow stack pointer).';
+    }
+    else if(k==='sh_store'){
+      st.shadow.unshift({addr:st.regs.r15, name:hex(RET), role:'shadow'});
+      info = 'Store the trusted copy at <code>(%r15)</code>. This region lives far from the buffer — the overflow can’t reach it.';
+    }
+    else if(k==='lea_buf'){
+      st.regs.rdi = 0x7fff18;
+      info = 'Point <code>%rdi</code> at the 8-byte local buffer, ready to receive the copied input.';
+    }
+    else if(k==='strcpy'){
+      // The actual overflow model: attacker bytes overwrite cells upward from buf.
+      if(st.scenario==='attack'){
+        // input long enough to overwrite buf, saved rbp, and the return slot with WIN.
+        st.main[2] = {addr:0x7fff18, name:'"AAAAAAAA"', role:'buf', corrupt:true};
+        st.main[1] = {addr:0x7fff20, name:'"AAAAAAAA"', role:'rbp', corrupt:true};
+        st.main[0] = {addr:0x7fff28, name:hex(WIN), role:'ret', corrupt:true};
+        info = '<span class="hl">Overflow!</span> The input is longer than 8 bytes, so <code>strcpy</code> runs off the end of the buffer, over the saved rbp, and overwrites the <span style="color:var(--bad)">return address</span> with '+hex(WIN)+' — the attacker’s <code>shell()</code> gadget.';
+      }else{
+        st.main[2] = {addr:0x7fff18, name:'"world"', role:'buf'};
+        info = 'Input fits in the 8-byte buffer. Nothing else on the stack is touched.';
+      }
+    }
+    else if(k==='use'){
+      info = 'The function does its work — prints <code>hello, '+(st.scenario==='attack'?'AAAAAAAA':'world')+'</code> — and heads for the exit.';
+    }
+    else if(k==='ep_load_main'){
+      st.regs.rax = st.main[0].corrupt ? WIN : RET;
+      info = 'Epilogue: read what the return address <em>currently</em> is on the main stack into <code>%rax</code> = <code>'+hex(st.regs.rax)+'</code>.';
+    }
+    else if(k==='ep_load_sh'){
+      st.regs.rcx = RET;
+      info = 'Read the trusted shadow copy into <code>%rcx</code> = <code>'+hex(RET)+'</code>.';
+    }
+    else if(k==='ep_pop_sh'){
+      st.regs.r15 += 8;
+      if(st.shadow.length) st.shadow.shift();
+      info = 'Pop the shadow stack — we’re done with this frame’s copy.';
+    }
+    else if(k==='ep_cmp'){
+      st.zf = (st.regs.rax === st.regs.rcx);
+      info = st.zf
+        ? 'Compare <code>%rax</code> vs <code>%rcx</code>: <span style="color:var(--ok)">equal</span>. ZF=1. The return address is intact.'
+        : 'Compare <code>%rax</code> vs <code>%rcx</code>: <span style="color:var(--bad)">NOT equal</span> ('+hex(st.regs.rax)+' ≠ '+hex(RET)+'). ZF=0 — tampering detected.';
+    }
+    else if(k==='ep_jne'){
+      if(!st.zf){
+        st.aborted = true;
+        info = '<code>jne</code> taken → jump to <code>__ss_abort</code>. The process is killed <em>before</em> the bad <code>ret</code> ever runs.';
+        snap(i, info);
+        break;
+      }else{
+        info = '<code>jne</code> not taken (ZF=1). Fall through to a safe <code>ret</code>.';
+      }
+    }
+    else if(k==='ret'){
+      st.finished = true;
+      if(st.main[0].corrupt && !st.shield){
+        st.pwned = true;
+        info = '<code>ret</code> pops <code>'+hex(WIN)+'</code> off the main stack and jumps there. With no shadow check, control flow lands in <code>shell()</code> — <span style="color:var(--bad)">the machine is pwned.</span>';
+      }else{
+        info = '<code>ret</code> pops '+hex(RET)+' and returns cleanly to main(). ✔';
+      }
+      snap(i, info);
+      break;
+    }
+    snap(i, info);
+  }
+  return frames;
+}
+
+/* ─────────── rendering ─────────── */
+const $ = s => document.querySelector(s);
+const asmEl=$('#asm'), regsEl=$('#regs'), mainEl=$('#mainstack'),
+      shadowEl=$('#shadowstack'), infoEl=$('#info'), verdictEl=$('#verdict');
+
+function renderAsm(curLine){
+  asmEl.innerHTML = PROG.map((p,i)=>{
+    const dim = (p.sh && !$('#shield').checked) ? 'opacity:.28;' : '';
+    const cls = ['ln'];
+    if(!p.lbl) cls.push('instr');
+    if(p.sh) cls.push('shrow');
+    if(i===curLine) cls.push('cur');
+    return `<span class="${cls.join(' ')}" style="${dim}">${p.t.replace('greet:','<span class=lbl>greet:</span>')}</span>`;
+  }).join('');
+}
+
+function renderRegs(f){
+  const r=f.regs;
+  const row=(k,v,chg)=>`<div><span class="k">${k}</span><span class="v ${chg?'chg':''}">${hex(v)}</span></div>`;
+  const zf = f.zf===null?'<span class="flag unset">ZF —</span>'
+           : f.zf?'<span class="flag set">ZF 1</span>':'<span class="flag unset">ZF 0</span>';
+  regsEl.innerHTML =
+    row('rax',r.rax)+row('rcx',r.rcx)+row('rsp',r.rsp)+row('r15',r.r15)+
+    `<div><span class="k">flags</span><span class="v">${zf}</span></div>`+
+    `<div><span class="k">rip</span><span class="v">${hex(r.rip)}</span></div>`;
+}
+
+function renderStack(el, cells, kind, spAddr){
+  if(!cells.length){ el.innerHTML='<div class="cell empty"><span class="name">(empty)</span></div>'; return; }
+  el.innerHTML = cells.map(c=>{
+    const cls=['cell'];
+    if(kind==='shadow') cls.push('shadow');
+    if(c.role==='ret') cls.push('retn');
+    if(c.corrupt) cls.push('corrupt');
+    if(c.addr===spAddr) cls.push('sp');
+    const sp = c.addr===spAddr ? `<span class="sptag">◄ ${kind==='shadow'?'r15':'rsp'}</span>` : '';
+    return `<div class="${cls.join(' ')}"><span class="addr">${hex(c.addr)}</span><span class="name">${c.name} ${sp}</span></div>`;
+  }).join('');
+}
+
+function paint(f){
+  renderAsm(f.line);
+  renderRegs(f);
+  renderStack(mainEl, f.main, 'main', f.regs.rsp);
+  renderStack(shadowEl, f.shadow, 'shadow', f.regs.r15);
+  infoEl.innerHTML = '<h3>'+PROG[f.line].t.replace(/<[^>]+>/g,'').trim().replace(/#.*/,'').trim()+'</h3>'+f.info;
+  verdictEl.className='verdict';
+  if(f.aborted){ verdictEl.className='verdict show safe';
+    verdictEl.innerHTML='🛡️ Shadow stack caught it — process aborted.<small>The corrupted return address never got used. This is exactly what Intel CET / ARM64 SCS do in hardware.</small>'; }
+  else if(f.pwned){ verdictEl.className='verdict show pwned';
+    verdictEl.innerHTML='💀 Pwned — jumped to attacker code.<small>No shadow check ran (you unchecked the shield). The overflow redirected control flow to shell().</small>'; }
+  else if(f.finished){ verdictEl.className='verdict show done';
+    verdictEl.innerHTML='✔ Returned cleanly to main().<small>Return address matched its shadow copy.</small>'; }
+}
+
+/* ─────────── driver ─────────── */
+function reset(){ log=build(); ip=-1; paint({line:1,info:'Press <span class="hl">Step ▸</span>.',regs:fresh().regs,zf:null,main:fresh().main,shadow:[],aborted:false,pwned:false,finished:false});
+  $('#step').disabled=false; $('#run').disabled=false; }
+function step(){
+  if(ip>=log.length-1) return;
+  ip++; paint(log[ip]);
+  if(ip>=log.length-1){ $('#step').disabled=true; $('#run').disabled=true; }
+}
+function run(){ const t=setInterval(()=>{ if(ip>=log.length-1){clearInterval(t);return;} step(); },550); }
+
+$('#step').onclick=step;
+$('#run').onclick=run;
+$('#reset').onclick=reset;
+$('#shield').onchange=reset;
+document.querySelectorAll('#scenario button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#scenario button').forEach(x=>x.classList.remove('on','bad'));
+  b.classList.add('on'); if(b.dataset.s==='attack') b.classList.add('bad'); reset();
+});
+reset();
+
+/* ─────────── Hebrew glossary popups ─────────── */
+const hepop=$('#hepop'); let heCur=null;
+function showHe(el){
+  hepop.textContent=el.dataset.he; hepop.classList.add('on');
+  const r=el.getBoundingClientRect();
+  hepop.style.left=Math.min(window.innerWidth-150, Math.max(150, r.left+r.width/2))+'px';
+  hepop.style.top=(r.top-8)+'px'; hepop.style.transform='translate(-50%,-100%)';
+  if(heCur) heCur.classList.remove('he-on'); heCur=el; el.classList.add('he-on');
+}
+function hideHe(){ hepop.classList.remove('on'); if(heCur){heCur.classList.remove('he-on');heCur=null;} }
+document.querySelectorAll('.he').forEach(el=>{
+  el.addEventListener('mouseenter',()=>showHe(el));
+  el.addEventListener('mouseleave',hideHe);
+  el.addEventListener('click',()=>heCur===el?hideHe():showHe(el));
+});
+</script>
+</body>
+</html>
