@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hardware Shadow Stack — Intel CET & ARM GCS do it in silicon</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pur:#bc8cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}
+  header{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 4px;font-size:22px}
+  header p{margin:0 0 6px;color:var(--dim);max-width:92ch}
+  header code{font-family:var(--mono);color:var(--pur);font-size:13px}
+  .xtabs{display:flex;gap:8px;padding:14px 28px 0}
+  .xtabs a{text-decoration:none;font:600 13px/1 system-ui;padding:8px 13px;border:1px solid var(--line);
+    border-radius:8px;color:var(--dim)}
+  .xtabs a:hover{border-color:var(--acc);color:var(--acc)}
+  .xtabs a.here{background:var(--acc);color:#04121f;border-color:var(--acc)}
+  .wrap{display:grid;grid-template-columns:1.15fr 1fr;gap:0;min-height:calc(100vh - 160px)}
+  .left{padding:20px 24px;border-right:1px solid var(--line)}
+  .right{padding:20px 24px;display:flex;flex-direction:column;gap:14px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 12px}
+  .asm{background:#010409;border:1px solid var(--line);border-radius:10px;padding:12px 0;
+       font-family:var(--mono);font-size:12.5px;line-height:1.7;overflow-x:auto}
+  .asm .ln{display:block;padding:1px 14px 1px 12px;white-space:pre;border-left:3px solid transparent}
+  .asm .ln.cur{background:rgba(88,166,255,.14);border-left-color:var(--acc)}
+  .asm .ln.instr:hover{background:rgba(139,148,158,.10)}
+  .asm .lbl{color:var(--pur)}
+  .asm .op{color:#ff7b72}
+  .asm .cm{color:var(--dim)}
+  .asm .reg{color:var(--acc)}
+  .asm .num{color:var(--ok)}
+  .asm .hw{color:var(--pur)}
+  .ctrl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:14px 0 4px}
+  button{font:600 13px/1 system-ui;background:var(--panel);color:var(--ink);border:1px solid var(--line);
+         border-radius:8px;padding:9px 14px;cursor:pointer;transition:.12s}
+  button:hover{border-color:var(--acc);color:var(--acc)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:var(--acc);color:#04121f;border-color:var(--acc)}
+  button.primary:hover{filter:brightness(1.1);color:#04121f}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg button{border:0;border-radius:0;background:transparent}
+  .seg button.on{background:var(--acc);color:#04121f}
+  .seg button.on.bad{background:var(--bad);color:#1a0000}
+  .toggle{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--dim)}
+  .toggle input{accent-color:var(--pur);width:16px;height:16px}
+  .regs{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 14px;background:var(--panel);
+        border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-family:var(--mono);font-size:12.5px}
+  .regs div{display:flex;justify-content:space-between}
+  .regs .k{color:var(--dim)} .regs .v{color:var(--ink)}
+  .regs .v.chg{color:var(--warn);font-weight:700}
+  .stacks{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .stackbox h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)}
+  .cells{display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:12px}
+  .cell{border:1px solid var(--line);border-radius:7px;padding:6px 9px;background:#010409;
+        display:flex;justify-content:space-between;gap:8px;transition:.15s}
+  .cell .addr{color:var(--dim)}
+  .cell .name{color:var(--ink)}
+  .cell.retn{border-color:var(--acc)}
+  .cell.retn .name{color:var(--acc)}
+  .cell.corrupt{border-color:var(--bad);background:rgba(248,81,73,.10)}
+  .cell.corrupt .name{color:var(--bad)}
+  .cell.shadow{border-color:var(--pur)}
+  .cell.shadow .name{color:var(--pur)}
+  .cell.sp{outline:2px solid var(--pur);outline-offset:-2px}
+  .cell .sptag{color:var(--pur);font-size:10px}
+  .cell.empty{opacity:.35}
+  .cell.locked{border-style:dashed}
+  .info{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc);
+        border-radius:8px;padding:13px 15px;font-size:13.5px;color:var(--dim);min-height:64px}
+  .info h3{margin:0 0 6px;color:var(--ink);font-size:14px}
+  .info code{font-family:var(--mono);color:var(--pur);font-size:12.5px}
+  .info .hl{color:var(--ink)}
+  .verdict{border-radius:8px;padding:12px 15px;font-size:14px;font-weight:600;display:none}
+  .verdict.show{display:block}
+  .verdict.pwned{background:rgba(248,81,73,.12);border:1px solid var(--bad);color:var(--bad)}
+  .verdict.safe{background:rgba(63,185,80,.12);border:1px solid var(--ok);color:var(--ok)}
+  .verdict.done{background:rgba(88,166,255,.10);border:1px solid var(--acc);color:var(--acc)}
+  .verdict small{display:block;font-weight:400;color:var(--dim);margin-top:4px}
+  section.prose{padding:26px 28px;border-top:1px solid var(--line);max-width:100ch}
+  section.prose h2{font-size:16px;text-transform:none;letter-spacing:0;color:var(--ink);margin:0 0 10px}
+  section.prose p{color:var(--dim);margin:0 0 12px}
+  section.prose li{color:var(--dim);margin:0 0 6px}
+  section.prose code{font-family:var(--mono);color:var(--pur);font-size:12.5px;
+    background:#010409;border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+  pre.block{background:#010409;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow-x:auto;color:var(--ink);margin:0 0 12px}
+  pre.block .c{color:var(--dim)} pre.block .k{color:#ff7b72} pre.block .s{color:var(--warn)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}.left{border-right:0;border-bottom:1px solid var(--line)}.grid2{grid-template-columns:1fr}}
+  footer{padding:14px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+  a{color:var(--acc)}
+  .he{border-bottom:1px dotted var(--warn);cursor:help}
+  .he:hover,.he.he-on{color:var(--warn);background:rgba(210,153,34,.15)}
+  .hepop{position:fixed;z-index:60;display:none;direction:rtl;background:var(--warn);color:#1a1400;
+    font:600 13px/1.45 system-ui,sans-serif;padding:7px 11px;border-radius:8px;max-width:280px;
+    pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.45)}
+  .hepop.on{display:block}
+</style>
+</head>
+<body>
+<header>
+  <h1>Hardware Shadow Stack — the CPU keeps the copy</h1>
+  <p>On the <a href="index.html">software page</a> the function carried eight extra instructions to maintain a shadow copy of its <span class="he" data-he="כתובת חזרה — לאן ה־ret קופץ בסיום הפונקציה">return address</span>. With <b>Intel CET</b> (<span class="he" data-he="Control-flow Enforcement Technology — הגנת זרימת בקרה של אינטל בחומרה">CET</span>) or <b>ARM GCS</b>, that work moves into silicon: <code>call</code> pushes the return address to a second, hardware-protected stack automatically, and <code>ret</code> checks it. The function's own code is <em>unchanged</em> — the same plain <code>greet()</code>, zero instrumentation.</p>
+</header>
+
+<nav class="xtabs">
+  <a href="index.html">← Software shadow stack</a>
+  <a href="hardware.html" class="here">Hardware shadow stack</a>
+</nav>
+
+<div class="wrap">
+  <div class="left">
+    <h2>greet() — plain x86-64, no instrumentation</h2>
+    <div class="asm" id="asm"></div>
+    <div class="ctrl">
+      <button id="step" class="primary">Step ▸</button>
+      <button id="run">Run ⏩</button>
+      <button id="reset">↺ Reset</button>
+      <div class="seg" id="scenario" style="margin-left:auto">
+        <button data-s="normal" class="on">Normal input</button>
+        <button data-s="attack">Attack input</button>
+      </div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="cet" checked />
+      CET shadow stack enabled in the CPU (uncheck to disable the hardware check)
+    </label>
+    <h2 style="margin-top:18px">Registers</h2>
+    <div class="regs" id="regs"></div>
+    <p style="color:var(--dim);font-size:12.5px;margin:12px 2px 0">
+      <span style="color:var(--pur)">SSP</span> is the <b>Shadow Stack Pointer</b> — a dedicated CPU register software cannot write with an ordinary <code>mov</code>. The shadow pages are mapped with a special "shadow stack" permission, so a stray store or overflow faults instead of landing.</p>
+  </div>
+
+  <div class="right">
+    <div class="stacks">
+      <div class="stackbox">
+        <h3>Main stack <span style="color:var(--pur)">(rsp)</span></h3>
+        <div class="cells" id="mainstack"></div>
+      </div>
+      <div class="stackbox">
+        <h3>Shadow stack <span style="color:var(--pur)">(SSP, hardware)</span></h3>
+        <div class="cells" id="shadowstack"></div>
+      </div>
+    </div>
+    <div class="info" id="info"><h3>Ready.</h3>Press <span class="hl">Step ▸</span>. Notice the function has <em>no</em> shadow-stack instructions — the CPU pushes and checks on <code>call</code>/<code>ret</code> for you.</div>
+    <div class="verdict" id="verdict"></div>
+  </div>
+</div>
+
+<section class="prose">
+  <div class="grid2">
+    <div>
+      <h2>1 · What the hardware actually does</h2>
+      <p>Once CET shadow stacks are enabled, every <code>call</code> becomes an implicit dual push and every <code>ret</code> an implicit compare:</p>
+      <ul>
+        <li><code>call</code> → push return address to the main stack <em>and</em> to <code>SSP</code>.</li>
+        <li><code>ret</code> → pop from both. If they differ, the CPU raises a <b>#CP</b> (Control-Protection) fault → the kernel delivers <code>SIGSEGV</code>.</li>
+      </ul>
+      <p>The shadow pages carry a special page-table encoding: normal writes to them fault, so an overflow can't quietly rewrite the copy the way it rewrites the main stack. That's the guarantee <code>%r15</code> only <em>approximated</em> in software.</p>
+      <h2 style="margin-top:20px">2 · The instructions you can use</h2>
+      <p>The push/check are automatic, but privileged and setup code needs to touch the shadow stack explicitly:</p>
+      <pre class="block"><span class="k">rdsspq</span> %rax        <span class="c"># read current SSP</span>
+<span class="k">incsspq</span> $1         <span class="c"># pop N slots (e.g. longjmp/unwind)</span>
+<span class="k">wrssq</span>  %rax,(%rcx) <span class="c"># write to shadow stack (needs WRSS enabled)</span>
+<span class="k">rstorssp</span> (%rax)    <span class="c"># switch to a saved shadow stack (context switch)</span>
+<span class="k">saveprevssp</span>       <span class="c"># save the previous SSP token</span>
+<span class="k">endbr64</span>            <span class="c"># CET IBT landing pad — separate feature, not the shadow stack</span></pre>
+      <p>Enable bits live in <code>IA32_U_CET</code> / <code>IA32_S_CET</code> MSRs, gated by <code>CR4.CET</code>. Per-thread SSP for ring 3 comes from <code>IA32_PL3_SSP</code>.</p>
+    </div>
+    <div>
+      <h2>3 · Turning it on</h2>
+      <p>You compile for it and the OS arms it per-process:</p>
+      <pre class="block"><span class="c"># GCC/Clang: emit CET-compatible code</span>
+gcc <span class="s">-fcf-protection=full</span> -O2 prog.c -o prog
+
+<span class="c"># Linux enables it via arch_prctl(ARCH_SHSTK_ENABLE)</span>
+<span class="c"># glibc does this automatically when the binary + CPU support it.</span>
+<span class="c"># Windows: "Hardware-enforced Stack Protection" (opt-in per app).</span></pre>
+      <p>Hardware: Intel from <b>Tiger Lake</b> (11th-gen) and AMD from <b>Zen 3</b>. If either the CPU or the loaded libraries lack CET, the loader silently falls back to no shadow stack — a whole process must be CET-clean, because one legacy library that does unusual stack tricks would fault.</p>
+
+      <h2 style="margin-top:20px">4 · ARM's two answers</h2>
+      <p><b>PAC</b> (Pointer Authentication, ARMv8.3-A) came first and is <em>not</em> a shadow stack. It signs the return address with a cryptographic MAC packed into the pointer's unused top bits, keyed by a secret + the stack pointer:</p>
+      <pre class="block"><span class="k">paciasp</span>   <span class="c"># sign LR using SP as modifier (function entry)</span>
+...
+<span class="k">autiasp</span>   <span class="c"># authenticate LR before return; corrupt ⇒ fault</span>
+<span class="k">ret</span></pre>
+      <p><b>GCS</b> (Guarded Control Stack, Armv9.4-A / <code>FEAT_GCS</code>) is the real shadow stack: a hardware-managed second stack via <code>GCSPR_EL0</code>, with <code>gcspushm</code> / <code>gcspopm</code> and stack-switch ops <code>gcsss1</code>/<code>gcsss2</code>. It supersedes PAC-for-returns with the same guarantee Intel CET gives.</p>
+      <h2 style="margin-top:20px">5 · Why bother with hardware</h2>
+      <p>The software version cost real instructions in every prologue and epilogue, and burned a register. Hardware makes the check nearly free, protects the copy with page permissions software can't forge, and can't be skipped by jumping past the check — the <code>ret</code> itself is the check.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  Part of the <a href="https://elazarl.github.io/">maayan</a> explainer series · hover the <span class="he" data-he="מילון — ריחוף חושף את המונח בעברית">dotted words</span> for Hebrew · Intel CET / ARM GCS, x86-64 &amp; AArch64
+</footer>
+
+<div class="hepop" id="hepop"></div>
+
+<script>
+"use strict";
+const WIN = 0x401180;     // attacker target ("shell")
+const RET = 0x401142;     // legitimate return address in main()
+
+const PROG = [
+  {t:'greet:',                          lbl:true},
+  {t:'  <span class="hw"># call in main() pushed RET to BOTH stacks (hardware)</span>', k:'entry'},
+  {t:'  <span class="op">lea</span>  <span class="reg">-8(%rsp), %rdi</span>   <span class="cm"># char buf[8]</span>', k:'lea'},
+  {t:'  <span class="op">call</span> <span class="reg">strcpy</span>          <span class="cm"># copy attacker input → buf</span>', k:'strcpy'},
+  {t:'  <span class="cm"># ... prints "hello, ..." ...</span>', k:'use'},
+  {t:'  <span class="op">ret</span>                <span class="hw"># CPU compares main vs SSP here</span>', k:'ret'},
+];
+
+const hex = n => '0x'+(n>>>0).toString(16).padStart(6,'0');
+let log, ip;
+
+function fresh(){
+  const scenario = document.querySelector('#scenario .on').dataset.s;
+  const cet = document.getElementById('cet').checked;
+  return {
+    scenario, cet,
+    regs:{rax:0, rsp:0x7fff28, ssp:0x7f0018, rip:0x401142},
+    main:[
+      {addr:0x7fff28, name:hex(RET),  role:'ret'},
+      {addr:0x7fff20, name:'saved rbp', role:'rbp'},
+      {addr:0x7fff18, name:'buf[0..7]', role:'buf'},
+    ],
+    // shadow already holds the copy the CPU pushed at the call site
+    shadow:[{addr:0x7f0018, name:hex(RET), role:'shadow', locked:true}],
+    aborted:false, pwned:false, finished:false,
+  };
+}
+
+function build(){
+  const st = fresh();
+  const frames = [];
+  const snap = (line, info, chg) => frames.push({
+    line, info, chg:[...(chg||[])],
+    regs:{...st.regs},
+    main: st.main.map(c=>({...c})),
+    shadow: st.shadow.map(c=>({...c})),
+    aborted:st.aborted, pwned:st.pwned, finished:st.finished,
+  });
+
+  for(let i=0;i<PROG.length;i++){
+    const step = PROG[i];
+    if(step.lbl) continue;
+    const k = step.k; let info='', chg=[];
+
+    if(k==='entry'){
+      info = 'Before <code>greet</code> even runs, the <code>call</code> in main() pushed the <span class="hl">return address</span> '+hex(RET)+' onto <em>both</em> the main stack (<code>%rsp</code>) and the shadow stack (<code>SSP</code>). '+(st.cet?'CET is on, so the shadow copy at <code>'+hex(st.regs.ssp)+'</code> exists.':'CET is off — the shadow stack is inert; ignore the right column.');
+    }
+    else if(k==='lea'){ st.regs.rax=0; info='Point <code>%rdi</code> at the 8-byte buffer. No shadow-stack instruction here — the function is completely ordinary.'; }
+    else if(k==='strcpy'){
+      if(st.scenario==='attack'){
+        st.main[2] = {addr:0x7fff18, name:'"AAAAAAAA"', role:'buf', corrupt:true};
+        st.main[1] = {addr:0x7fff20, name:'"AAAAAAAA"', role:'rbp', corrupt:true};
+        st.main[0] = {addr:0x7fff28, name:hex(WIN), role:'ret', corrupt:true};
+        info = '<span class="hl">Overflow!</span> <code>strcpy</code> runs off the buffer and overwrites the main-stack <span style="color:var(--bad)">return address</span> with '+hex(WIN)+'. But the shadow copy sits on <span style="color:var(--pur)">CPU-protected pages</span> — the same store can\'t reach it, so it still reads '+hex(RET)+'.';
+      }else{
+        st.main[2] = {addr:0x7fff18, name:'"world"', role:'buf'};
+        info = 'Input fits. Nothing else on the stack is touched.';
+      }
+    }
+    else if(k==='use'){ info='The function does its work and heads for the exit.'; }
+    else if(k==='ret'){
+      st.finished = true;
+      const corrupt = st.main[0].corrupt;
+      if(st.cet && corrupt){
+        st.aborted = true; st.regs.rax = WIN;
+        info = 'On <code>ret</code> the CPU pops the return address from the main stack ('+hex(WIN)+') and from <code>SSP</code> ('+hex(RET)+') and compares them. <span style="color:var(--bad)">Mismatch</span> → the CPU raises <b>#CP</b> and the kernel kills the process. No software check, no extra instruction — the <code>ret</code> itself refused.';
+      } else if(corrupt){
+        st.pwned = true; st.regs.rip = WIN;
+        info = '<code>ret</code> pops '+hex(WIN)+' and jumps there. With CET disabled the CPU never consults the shadow copy — control lands in <code>shell()</code>. <span style="color:var(--bad)">Pwned.</span>';
+      } else {
+        st.regs.rip = RET;
+        info = '<code>ret</code> pops '+hex(RET)+' from both stacks — they match, so the CPU returns cleanly to main(). ✔';
+      }
+      snap(i, info, ['rip']); break;
+    }
+    snap(i, info, chg);
+  }
+  return frames;
+}
+
+const $ = s => document.querySelector(s);
+const asmEl=$('#asm'), regsEl=$('#regs'), mainEl=$('#mainstack'),
+      shadowEl=$('#shadowstack'), infoEl=$('#info'), verdictEl=$('#verdict');
+
+function renderAsm(cur){
+  asmEl.innerHTML = PROG.map((p,i)=>{
+    const cls=['ln']; if(!p.lbl) cls.push('instr'); if(i===cur) cls.push('cur');
+    return `<span class="${cls.join(' ')}">${p.t.replace('greet:','<span class=lbl>greet:</span>')}</span>`;
+  }).join('');
+}
+function renderRegs(f){
+  const r=f.regs, chg=new Set(f.chg);
+  const row=(k,v)=>`<div><span class="k">${k}</span><span class="v ${chg.has(k)?'chg':''}">${hex(v)}</span></div>`;
+  regsEl.innerHTML=row('rax',r.rax)+row('rsp',r.rsp)+
+    `<div><span class="k" style="color:var(--pur)">SSP</span><span class="v">${hex(r.ssp)}</span></div>`+
+    row('rip',r.rip);
+}
+function renderStack(el, cells, kind, spAddr){
+  if(!cells.length){ el.innerHTML='<div class="cell empty"><span class="name">(empty)</span></div>'; return; }
+  el.innerHTML = cells.map(c=>{
+    const cls=['cell'];
+    if(kind==='shadow') cls.push('shadow');
+    if(c.role==='ret') cls.push('retn');
+    if(c.corrupt) cls.push('corrupt');
+    if(c.locked) cls.push('locked');
+    if(c.addr===spAddr) cls.push('sp');
+    const sp = c.addr===spAddr ? `<span class="sptag">◄ ${kind==='shadow'?'SSP':'rsp'}</span>` : '';
+    return `<div class="${cls.join(' ')}"><span class="addr">${hex(c.addr)}</span><span class="name">${c.name} ${sp}</span></div>`;
+  }).join('');
+}
+function paint(f){
+  renderAsm(f.line); renderRegs(f);
+  renderStack(mainEl, f.main, 'main', f.regs.rsp);
+  renderStack(shadowEl, f.cet===false?[]:f.shadow, 'shadow', f.regs.ssp);
+  infoEl.innerHTML = '<h3>'+PROG[f.line].t.replace(/<[^>]+>/g,'').trim().replace(/#.*/,'').trim()+'</h3>'+f.info;
+  verdictEl.className='verdict';
+  if(f.aborted){ verdictEl.className='verdict show safe';
+    verdictEl.innerHTML='🛡️ #CP fault — CPU refused the bad return.<small>Intel CET raised a Control-Protection exception; the kernel delivered SIGSEGV before control flow could be hijacked.</small>'; }
+  else if(f.pwned){ verdictEl.className='verdict show pwned';
+    verdictEl.innerHTML='💀 Pwned — jumped to attacker code.<small>CET was disabled, so the shadow stack was never consulted.</small>'; }
+  else if(f.finished){ verdictEl.className='verdict show done';
+    verdictEl.innerHTML='✔ Returned cleanly to main().<small>Main-stack and shadow-stack return addresses matched.</small>'; }
+}
+
+function reset(){ log=build(); ip=-1;
+  const f0=fresh();
+  paint({line:1,info:'Press <span class="hl">Step ▸</span>.',regs:f0.regs,main:f0.main,shadow:f0.shadow,cet:f0.cet,chg:[],aborted:false,pwned:false,finished:false});
+  $('#step').disabled=false; $('#run').disabled=false; }
+function step(){ if(ip>=log.length-1) return; ip++; const f=log[ip]; f.cet=document.getElementById('cet').checked; paint(f);
+  if(ip>=log.length-1){ $('#step').disabled=true; $('#run').disabled=true; } }
+function run(){ const t=setInterval(()=>{ if(ip>=log.length-1){clearInterval(t);return;} step(); },600); }
+
+$('#step').onclick=step; $('#run').onclick=run; $('#reset').onclick=reset;
+$('#cet').onchange=reset;
+document.querySelectorAll('#scenario button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#scenario button').forEach(x=>x.classList.remove('on','bad'));
+  b.classList.add('on'); if(b.dataset.s==='attack') b.classList.add('bad'); reset();
+});
+reset();
+
+/* Hebrew glossary popups */
+const hepop=$('#hepop'); let heCur=null;
+function showHe(el){
+  hepop.textContent=el.dataset.he; hepop.classList.add('on');
+  const r=el.getBoundingClientRect();
+  hepop.style.left=Math.min(window.innerWidth-150, Math.max(150, r.left+r.width/2))+'px';
+  hepop.style.top=(r.top-8)+'px'; hepop.style.transform='translate(-50%,-100%)';
+  if(heCur) heCur.classList.remove('he-on'); heCur=el; el.classList.add('he-on');
+}
+function hideHe(){ hepop.classList.remove('on'); if(heCur){heCur.classList.remove('he-on');heCur=null;} }
+document.querySelectorAll('.he').forEach(el=>{
+  el.addEventListener('mouseenter',()=>showHe(el));
+  el.addEventListener('mouseleave',hideHe);
+  el.addEventListener('click',()=>heCur===el?hideHe():showHe(el));
+});
+</script>
+</body>
+</html>

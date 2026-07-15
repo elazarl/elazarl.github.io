@@ -93,7 +93,15 @@
     font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow-x:auto;color:var(--ink);margin:0 0 12px}
   pre.block .c{color:var(--dim)} pre.block .k{color:#ff7b72} pre.block .s{color:var(--warn)}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-  @media(max-width:900px){.wrap{grid-template-columns:1fr}.left{border-right:0;border-bottom:1px solid var(--line)}.grid2{grid-template-columns:1fr}}
+  /* ── mini call-frame demo ── */
+  .cf-wrap{display:grid;grid-template-columns:1.05fr .95fr;gap:18px;align-items:start;margin:6px 0 4px}
+  .cf-side{display:flex;flex-direction:column;gap:12px}
+  .xtabs{display:flex;gap:8px;margin:0 0 16px}
+  .xtabs a{text-decoration:none;font:600 13px/1 system-ui;padding:8px 13px;border:1px solid var(--line);
+    border-radius:8px;color:var(--dim)}
+  .xtabs a:hover{border-color:var(--acc);color:var(--acc)}
+  .xtabs a.here{background:var(--acc);color:#04121f;border-color:var(--acc)}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}.left{border-right:0;border-bottom:1px solid var(--line)}.grid2{grid-template-columns:1fr}.cf-wrap{grid-template-columns:1fr}}
   footer{padding:14px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
   a{color:var(--acc)}
   /* hover/tap-for-Hebrew glossary words */
@@ -110,6 +118,11 @@
   <h1>Shadow Stack — catching return-address hijacking</h1>
   <p>A function's <span class="he" data-he="כתובת חזרה — לאן ה־ret קופץ בסיום הפונקציה">return address</span> lives on the same stack as its local buffers. Overflow a buffer and you overwrite that address — the classic <span class="he" data-he="גלישת חוצץ — כתיבה מעבר לגבול המערך על המחסנית">stack&nbsp;buffer&nbsp;overflow</span>. A <span class="he" data-he="מחסנית צל — עותק מוגן ונפרד של כתובות החזרה">shadow&nbsp;stack</span> keeps a second, separate copy of every return address and checks it before returning. Below is the whole idea in <code>~10</code> lines of real x86-64 — step through it, then flip on the attack.</p>
 </header>
+
+<nav class="xtabs" style="padding:14px 28px 0">
+  <a href="index.html" class="here">Software shadow stack</a>
+  <a href="hardware.html">Hardware shadow stack →</a>
+</nav>
 
 <div class="wrap">
   <!-- LEFT: assembly + controls + registers -->
@@ -152,6 +165,30 @@
   </div>
 </div>
 
+<section class="prose" id="callframe">
+  <h2>First · watch a real call put actual values on the stack</h2>
+  <p>Before the attack makes sense, see what a <em>normal</em> call does. Here <code>main()</code> calls <code>sum(3, 5)</code>. Step through and watch concrete hex values — the <span style="color:var(--acc)">return address</span>, the saved <code>%rbp</code>, and the two arguments — get pushed onto the stack, then popped back off. The <span class="he" data-he="כתובת חזרה — לאן ה־ret קופץ בסיום הפונקציה">return address</span> that lands at <code>0x7fffe048</code> is the exact slot the overflow demo above overwrites.</p>
+  <div class="cf-wrap">
+    <div>
+      <h2>main() → sum(3, 5) — x86-64 (AT&amp;T)</h2>
+      <div class="asm" id="cfasm"></div>
+      <div class="ctrl">
+        <button id="cfstep" class="primary">Step ▸</button>
+        <button id="cfrun">Run ⏩</button>
+        <button id="cfreset">↺ Reset</button>
+      </div>
+    </div>
+    <div class="cf-side">
+      <div class="regs" id="cfregs"></div>
+      <div class="stackbox">
+        <h3 style="margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)">Main stack — grows downward</h3>
+        <div class="cells" id="cfstack"></div>
+      </div>
+      <div class="info" id="cfinfo"><h3>Ready.</h3>Press <span class="hl">Step ▸</span>. Watch <code>%rsp</code> (purple) drop as things are pushed, and real values appear in each cell.</div>
+    </div>
+  </div>
+</section>
+
 <section class="prose">
   <div class="grid2">
     <div>
@@ -184,6 +221,23 @@ gcc -no-pie -fno-stack-protector \
       <p>The overflow walks <em>upward</em> from a local buffer through saved registers into the return slot — all on the main stack. The shadow region sits at a completely different address held only in <code>%r15</code>, which never gets spilled to the vulnerable frame. The attacker can smash <code>[rsp]</code> all day; <code>(%r15)</code> still holds the truth, and <code>cmp</code> notices the two disagree.</p>
     </div>
   </div>
+</section>
+
+<section class="prose">
+  <h2>4 · Real software shadow stacks in the wild</h2>
+  <p>The <code>%r15</code> trick above is the teaching version. Here are the production systems that ship the same idea — a separate, protected copy of return addresses — in software:</p>
+  <div class="grid2">
+    <div>
+      <p><b>LLVM / Clang <span class="he" data-he="מחסנית צל של הקומפיילר — עותק מוגן של כתובות חזרה שנשמר ברגיסטר ייעודי">ShadowCallStack</span></b> — <code>-fsanitize=shadow-call-stack</code>. Production on <b>AArch64</b>, where it reserves register <code>x18</code> as the shadow stack pointer (exactly the <code>%r15</code> role). The earlier x86-64 version was <b>removed</b>: on x86 the pointer had to live in a general register an attacker could find and the return address is pushed by <code>call</code> onto the normal stack anyway, so it couldn't be made robust — x86 was handed to hardware CET instead. Shipped broadly in <b>Android</b> (platform binaries and the kernel).</p>
+      <p><b>SafeStack</b> — <code>-fsanitize=safe-stack</code>. Not a return-address copy but a close cousin: it splits every frame into a <em>safe stack</em> (return address, spilled registers, anything not address-taken) held at a hidden location, and an <em>unsafe stack</em> (arrays and address-taken locals) that an overflow can only trash without reaching the return address.</p>
+    </div>
+    <div>
+      <p><b>grsecurity / PaX RAP</b> — Return Address Protection in the grsecurity kernel patch. Guards return addresses with a cryptographic/cookie scheme rather than a plain second stack; long predates the mainline hardware options.</p>
+      <p><b>Microsoft RFG</b> — Return Flow Guard was Microsoft's software shadow stack for Windows. It was <b>abandoned before shipping</b> once red-teams showed the thread-setup window was racy; Microsoft waited for Intel CET's hardware version instead.</p>
+      <p><b>Go</b> takes a different road entirely: goroutine stacks are managed and copied by the runtime, and safe Go has no way to overflow a buffer into a return address, so it needs no shadow stack at all. The problem is designed out rather than defended.</p>
+    </div>
+  </div>
+  <p>Notice the pattern: on x86-64 the software approaches all struggled with the same weakness this demo glosses over — the shadow pointer lives in a register or ordinary memory the attacker shares. That's precisely why the <a href="hardware.html">hardware shadow stack</a> exists: the CPU holds the pointer and maps the copy on pages a normal store can't touch.</p>
 </section>
 
 <footer>
@@ -436,6 +490,117 @@ document.querySelectorAll('.he').forEach(el=>{
   el.addEventListener('mouseleave',hideHe);
   el.addEventListener('click',()=>heCur===el?hideHe():showHe(el));
 });
+
+/* ─────────── mini call-frame stepper: main() → sum(3,5) ─────────── */
+(function(){
+  const RETADDR = 0x401156;   // return address in main(), right after `call sum`
+  const CALLER_RBP = 0x7fffe050;
+  const hx = n => '0x'+(n>>>0).toString(16);
+
+  // Curated listing. k drives the interpreter; sub marks the sum() body.
+  const P = [
+    {t:'<span class=lbl>main:</span>'},
+    {t:'  <span class="op">mov</span>  <span class="num">$3</span>, <span class="reg">%edi</span>        <span class="cm"># arg a = 3</span>', k:'a'},
+    {t:'  <span class="op">mov</span>  <span class="num">$5</span>, <span class="reg">%esi</span>        <span class="cm"># arg b = 5</span>', k:'b'},
+    {t:'  <span class="op">call</span> <span class="reg">sum</span>            <span class="cm"># push return addr, jump</span>', k:'call'},
+    {t:'<span class=lbl>sum:</span>'},
+    {t:'  <span class="op">push</span> <span class="reg">%rbp</span>          <span class="cm"># save caller frame base</span>', k:'push'},
+    {t:'  <span class="op">mov</span>  <span class="reg">%rsp, %rbp</span>     <span class="cm"># set up new frame</span>', k:'setfp'},
+    {t:'  <span class="op">sub</span>  <span class="num">$16</span>, <span class="reg">%rsp</span>      <span class="cm"># reserve locals</span>', k:'sub'},
+    {t:'  <span class="op">mov</span>  <span class="reg">%edi</span>, <span class="reg">-4(%rbp)</span>  <span class="cm"># store a</span>', k:'sta'},
+    {t:'  <span class="op">mov</span>  <span class="reg">%esi</span>, <span class="reg">-8(%rbp)</span>  <span class="cm"># store b</span>', k:'stb'},
+    {t:'  <span class="op">mov</span>  <span class="reg">-4(%rbp)</span>, <span class="reg">%eax</span>  <span class="cm"># eax = a</span>', k:'lda'},
+    {t:'  <span class="op">add</span>  <span class="reg">-8(%rbp)</span>, <span class="reg">%eax</span>  <span class="cm"># eax = a + b</span>', k:'add'},
+    {t:'  <span class="op">leave</span>              <span class="cm"># rsp=rbp; pop %rbp</span>', k:'leave'},
+    {t:'  <span class="op">ret</span>                <span class="cm"># pop return addr, jump back</span>', k:'ret'},
+    {t:'<span class=lbl>main:</span> <span class="cm"># back here, %eax = 8</span>', k:'done'},
+  ];
+
+  function fresh(){
+    return {
+      regs:{edi:0, esi:0, eax:0, rsp:0x7fffe050, rbp:CALLER_RBP, rip:0x401140},
+      // highest address first (top of list); pushes append lower addresses
+      cells:[{addr:0x7fffe050, name:"main's frame", role:'caller'}],
+    };
+  }
+
+  function build(){
+    const st = fresh(); const frames=[];
+    const snap=(line,info,chg)=>frames.push({line,info,chg:[...(chg||[])],
+      regs:{...st.regs}, cells:st.cells.map(c=>({...c}))});
+    for(let i=0;i<P.length;i++){
+      const p=P[i]; if(!p.k) continue; const k=p.k; let info='', chg=[];
+      if(k==='a'){ st.regs.edi=3; chg=['edi']; info='Put the first argument <code>a = 3</code> in <code>%edi</code>. (System V passes the first integer args in registers, not on the stack.)'; }
+      else if(k==='b'){ st.regs.esi=5; chg=['esi']; info='Put the second argument <code>b = 5</code> in <code>%esi</code>.'; }
+      else if(k==='call'){
+        st.regs.rsp-=8; st.regs.rip=0x401143; chg=['rsp','rip'];
+        st.cells.push({addr:st.regs.rsp, name:hx(RETADDR), role:'ret'});
+        info='<code>call</code> does two things: it <span class="hl">pushes the return address</span> '+hx(RETADDR)+' onto the stack (<code>%rsp</code> drops 8) and jumps into <code>sum</code>. That value at <code>'+hx(st.regs.rsp)+'</code> is the return address — the whole reason a shadow stack exists.';
+      }
+      else if(k==='push'){
+        st.regs.rsp-=8; chg=['rsp'];
+        st.cells.push({addr:st.regs.rsp, name:hx(CALLER_RBP), role:'rbp'});
+        info='Save the caller\'s frame base by pushing the old <code>%rbp</code> = '+hx(CALLER_RBP)+'. <code>%rsp</code> drops another 8.';
+      }
+      else if(k==='setfp'){ st.regs.rbp=st.regs.rsp; chg=['rbp']; info='<code>%rbp</code> now points at this frame\'s base = <code>'+hx(st.regs.rbp)+'</code>. Locals are addressed relative to it.'; }
+      else if(k==='sub'){ st.regs.rsp-=16; chg=['rsp']; info='Reserve 16 bytes for locals by dropping <code>%rsp</code> to <code>'+hx(st.regs.rsp)+'</code>. The slots between <code>%rbp</code> and <code>%rsp</code> are now ours.'; }
+      else if(k==='sta'){ st.cells.push({addr:st.regs.rbp-4, name:'a = 0x3', role:'loc'}); info='Store <code>a</code> at <code>-4(%rbp)</code> = <code>'+hx(st.regs.rbp-4)+'</code>. A real value lands in the frame.'; }
+      else if(k==='stb'){ st.cells.push({addr:st.regs.rbp-8, name:'b = 0x5', role:'loc'}); info='Store <code>b</code> at <code>-8(%rbp)</code> = <code>'+hx(st.regs.rbp-8)+'</code>.'; }
+      else if(k==='lda'){ st.regs.eax=3; chg=['eax']; info='Load <code>a</code> back into <code>%eax</code> = <code>0x3</code>.'; }
+      else if(k==='add'){ st.regs.eax=8; chg=['eax']; info='Add <code>b</code>: <code>%eax</code> = 3 + 5 = <code>0x8</code>. That\'s the return value.'; }
+      else if(k==='leave'){
+        st.regs.rsp=st.regs.rbp; st.regs.rbp=CALLER_RBP; st.regs.rsp+=8; chg=['rsp','rbp'];
+        // drop locals + the saved-rbp cell we just popped
+        st.cells=st.cells.filter(c=>c.role!=='loc' && c.role!=='rbp');
+        info='<code>leave</code> = <code>mov %rbp,%rsp; pop %rbp</code>. Locals vanish and the saved <code>%rbp</code> is restored. <code>%rsp</code> is back at the return address <code>'+hx(st.regs.rsp)+'</code>.';
+      }
+      else if(k==='ret'){
+        st.regs.rsp+=8; st.regs.rip=RETADDR; chg=['rsp','rip'];
+        st.cells=st.cells.filter(c=>c.role!=='ret');
+        info='<code>ret</code> pops the return address <code>'+hx(RETADDR)+'</code> into <code>%rip</code> and jumps back to <code>main</code>. The stack is exactly as it started.';
+      }
+      else if(k==='done'){ info='Back in <code>main()</code> with <code>%eax = 0x8</code>. Every value the call pushed has been cleaned up. <span class="hl">Now flip up to the demo above</span> and watch an oversized input overwrite that return-address slot instead.'; }
+      snap(i,info,chg);
+    }
+    return frames;
+  }
+
+  const $=s=>document.querySelector(s);
+  const asmEl=$('#cfasm'), regsEl=$('#cfregs'), stkEl=$('#cfstack'), infoEl=$('#cfinfo');
+  let frames, ip;
+
+  function renderAsm(cur){
+    asmEl.innerHTML=P.map((p,i)=>`<span class="ln ${p.k?'instr':''} ${i===cur?'cur':''}">${p.t}</span>`).join('');
+  }
+  function renderRegs(f){
+    const r=f.regs, chg=new Set(f.chg);
+    const row=(k,v)=>`<div><span class="k">${k}</span><span class="v ${chg.has(k)?'chg':''}">${hx(v)}</span></div>`;
+    regsEl.innerHTML=row('edi',r.edi)+row('esi',r.esi)+row('eax',r.eax)+row('rsp',r.rsp)+row('rbp',r.rbp)+row('rip',r.rip);
+  }
+  function renderStack(f){
+    stkEl.innerHTML=f.cells.map(c=>{
+      const cls=['cell']; if(c.role==='ret') cls.push('retn');
+      const isSp=c.addr===f.regs.rsp, isFp=c.addr===f.regs.rbp;
+      if(isSp) cls.push('sp');
+      let tag=''; if(isSp&&isFp) tag='<span class="sptag">◄ rsp,rbp</span>';
+      else if(isSp) tag='<span class="sptag">◄ rsp</span>';
+      else if(isFp) tag='<span class="sptag">◄ rbp</span>';
+      return `<div class="${cls.join(' ')}"><span class="addr">${hx(c.addr)}</span><span class="name">${c.name} ${tag}</span></div>`;
+    }).join('');
+  }
+  function paint(f){
+    renderAsm(f.line); renderRegs(f); renderStack(f);
+    infoEl.innerHTML='<h3>'+P[f.line].t.replace(/<[^>]+>/g,'').trim().replace(/#.*/,'').trim()+'</h3>'+f.info;
+  }
+  function reset(){ frames=build(); ip=-1;
+    paint({line:0,info:'Press <span class="hl">Step ▸</span> to run one instruction.',regs:fresh().regs,cells:fresh().cells,chg:[]});
+    $('#cfstep').disabled=false; $('#cfrun').disabled=false; }
+  function step(){ if(ip>=frames.length-1) return; ip++; paint(frames[ip]);
+    if(ip>=frames.length-1){ $('#cfstep').disabled=true; $('#cfrun').disabled=true; } }
+  function run(){ const t=setInterval(()=>{ if(ip>=frames.length-1){clearInterval(t);return;} step(); },600); }
+  $('#cfstep').onclick=step; $('#cfrun').onclick=run; $('#cfreset').onclick=reset;
+  reset();
+})();
 </script>
 </body>
 </html>
