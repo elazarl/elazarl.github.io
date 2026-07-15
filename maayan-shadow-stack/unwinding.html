@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>C++ exceptions vs the shadow stack — unwinding two stacks at once</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pur:#bc8cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}
+  header{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 4px;font-size:22px}
+  header p{margin:0 0 6px;color:var(--dim);max-width:94ch}
+  header code{font-family:var(--mono);color:var(--pur);font-size:13px}
+  .xtabs{display:flex;gap:8px;flex-wrap:wrap;padding:14px 28px 0}
+  .xtabs a{text-decoration:none;font:600 13px/1 system-ui;padding:8px 13px;border:1px solid var(--line);
+    border-radius:8px;color:var(--dim)}
+  .xtabs a:hover{border-color:var(--acc);color:var(--acc)}
+  .xtabs a.here{background:var(--acc);color:#04121f;border-color:var(--acc)}
+  section{padding:24px 28px;border-top:1px solid var(--line)}
+  section:first-of-type{border-top:0}
+  h2{font-size:16px;color:var(--ink);margin:0 0 12px}
+  h2 .tag{font:600 11px/1 system-ui;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);
+    border:1px solid var(--line);border-radius:5px;padding:3px 6px;margin-left:8px;vertical-align:middle}
+  h2 .arch{color:var(--pur);border-color:var(--pur)}
+  p{color:var(--dim);margin:0 0 12px;max-width:94ch}
+  code{font-family:var(--mono);color:var(--pur);font-size:12.5px;background:#010409;
+    border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+  pre.block{background:#010409;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    font-family:var(--mono);font-size:12.5px;line-height:1.7;overflow-x:auto;color:var(--ink);margin:0 0 12px}
+  pre.block .c{color:var(--dim)} pre.block .k{color:#ff7b72} pre.block .r{color:var(--acc)}
+  pre.block .n{color:var(--ok)} pre.block .sh{color:var(--warn);font-weight:700}
+  pre.block .shln{background:rgba(210,153,34,.10);display:inline-block;width:100%}
+  pre.block .ok{color:var(--ok)}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+  .legend{display:flex;flex-wrap:wrap;gap:10px 18px;margin:4px 0 14px;font-size:12.5px;color:var(--dim)}
+  .legend b{color:var(--ink)}
+  .ctrl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 14px}
+  button{font:600 13px/1 system-ui;background:var(--panel);color:var(--ink);border:1px solid var(--line);
+         border-radius:8px;padding:9px 14px;cursor:pointer;transition:.12s}
+  button:hover{border-color:var(--acc);color:var(--acc)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:var(--acc);color:#04121f;border-color:var(--acc)}
+  .toggle{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--dim);margin-left:auto}
+  .toggle input{accent-color:var(--warn);width:16px;height:16px}
+  .stagewrap{display:grid;grid-template-columns:1.15fr 1fr;gap:20px;align-items:start}
+  .stacks{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .stackbox h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)}
+  .cells{display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:11.5px;min-height:40px}
+  .cell{border:1px solid var(--line);border-radius:7px;padding:6px 9px;background:#010409;
+        display:flex;justify-content:space-between;gap:8px;transition:.2s}
+  .cell .addr{color:var(--dim)} .cell .name{color:var(--ink);text-align:right}
+  .cell.throw{border-color:var(--bad);background:rgba(248,81,73,.12)} .cell.throw .name{color:var(--bad)}
+  .cell.catchf{border-color:var(--ok)} .cell.catchf .name{color:var(--ok)}
+  .cell.shadow{border-color:var(--warn)} .cell.shadow .name{color:var(--warn)}
+  .cell.stale{border-color:var(--bad);border-style:dashed} .cell.stale .name{color:var(--bad)}
+  .call-tree{font-family:var(--mono);font-size:12.5px;line-height:1.9;color:var(--dim);margin:0 0 10px}
+  .info{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc);
+        border-radius:8px;padding:13px 15px;font-size:13.5px;color:var(--dim);min-height:80px;margin-top:14px}
+  .info.warn{border-left-color:var(--bad)}
+  .info h3{margin:0 0 6px;color:var(--ink);font-size:14px}
+  .info code{background:transparent;border:0;padding:0}
+  .regtbl{width:100%;border-collapse:collapse;font-size:13px;margin:0 0 4px}
+  .regtbl td,.regtbl th{border:1px solid var(--line);padding:7px 10px;vertical-align:top;text-align:left}
+  .regtbl th{color:var(--ink);font-size:12px}
+  .regtbl td:first-child{color:var(--ink)}
+  @media(max-width:900px){.cols,.stagewrap{grid-template-columns:1fr}}
+  footer{padding:14px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+  a{color:var(--acc)}
+</style>
+</head>
+<body>
+<header>
+  <h1>C++ exceptions vs the shadow stack</h1>
+  <p>A <code>throw</code> doesn't return one frame at a time — the unwinder rips past <em>many</em> frames at once to reach the matching <code>catch</code>. But every one of those skipped frames also pushed a return address onto the shadow stack. If the shadow stack isn't unwound in lockstep, its pointer is left dangling and the <em>next</em> ordinary <code>ret</code> faults. Here's how clang solves that on both architectures — real output, x86-64 run over SSH, AArch64 cross-compiled.</p>
+</header>
+
+<nav class="xtabs">
+  <a href="index.html">Software shadow stack</a>
+  <a href="hardware.html">Hardware shadow stack</a>
+  <a href="clang.html">clang · AArch64</a>
+  <a href="x86.html">clang · x86-64</a>
+  <a href="unwinding.html" class="here">C++ unwinding</a>
+</nav>
+
+<section>
+  <h2>1 · A throw across four frames <span class="tag">ex.cpp</span></h2>
+  <p><code>main</code> calls <code>middle</code>, which recurses <code>deep(3) → deep(0)</code>, and the innermost frame throws. The <code>catch</code> is all the way back in <code>main</code> — so the unwinder must discard five frames in one shot.</p>
+  <pre class="block"><span class="k">struct</span> Boom { <span class="k">int</span> code; };
+<span class="k">void</span> deep(<span class="k">int</span> n) {
+    <span class="k">if</span> (n == <span class="n">0</span>) <span class="k">throw</span> Boom{<span class="n">42</span>};   <span class="c">// innermost frame throws</span>
+    printf(<span class="n">"deep(%d)\n"</span>, n);
+    deep(n - <span class="n">1</span>);
+}
+<span class="k">void</span> middle() { deep(<span class="n">3</span>); }
+<span class="k">int</span> main() {
+    <span class="k">try</span> { middle(); }
+    <span class="k">catch</span> (<span class="k">const</span> Boom& b) { printf(<span class="n">"caught %d\n"</span>, b.code); }
+}</pre>
+  <p>Built on the x86-64 host both ways — plain, and with the CET shadow stack — it unwinds cleanly either way:</p>
+  <pre class="block"><span class="c">$ ssh home 'clang++ -O1 ex.cpp -o ex && ./ex'</span>
+  deep(3) … deep(2) … deep(1)
+<span class="ok">caught Boom code=42 — unwound cleanly</span>
+
+<span class="c">$ ssh home 'clang++ -O1 -fcf-protection=full ex.cpp -o ex_cet && ./ex_cet'</span>
+  deep(3) … deep(2) … deep(1)
+<span class="ok">caught Boom code=42 — unwound cleanly</span>   <span class="c"># shadow stack stayed consistent</span></pre>
+  <p>Same result — which is the whole point. The machinery that keeps the shadow stack consistent through the unwind is invisible at the C++ level. Below is where it actually lives, and it's in a <em>different place</em> on each architecture.</p>
+</section>
+
+<section>
+  <h2>2 · AArch64 — the rule is baked into the code <span class="tag arch">ShadowCallStack</span></h2>
+  <p>With <code>-fsanitize=shadow-call-stack</code>, clang instruments <code>deep()</code> with the usual shadow push — but it also emits a <b>DWARF unwind rule</b> for <code>x18</code>. Those two lines (highlighted) are the <em>entire</em> difference from the plain build:</p>
+  <div class="cols">
+    <div>
+      <pre class="block">_Z4deepi:                    <span class="c"># deep(int)</span>
+<span class="shln"><span class="sh">    str  x30, [x18], #8</span>      <span class="c"># push ret → shadow stack</span></span>
+<span class="shln"><span class="sh">    .cfi_escape 0x16,0x12,0x02,0x82,0x78</span></span>
+    stp  x29, x30, [sp, #-32]!
+    mov  x29, sp
+    ...
+    bl   __cxa_allocate_exception
+    bl   __cxa_throw          <span class="c"># the throw</span></pre>
+    </div>
+    <div>
+      <p>That <code>.cfi_escape</code> decodes to a <code>DW_CFA_val_expression</code> for register 18:</p>
+      <pre class="block">0x16  DW_CFA_val_expression
+0x12  register 18  (x18)
+0x02  expression length = 2
+0x82  DW_OP_breg18   <span class="c"># "value of x18 plus…"</span>
+0x78  SLEB128 = <span class="sh">-8</span></pre>
+      <p>Read it as a sentence: <b>to unwind one frame, set <code>x18 = x18 − 8</code></b> — pop exactly one 8-byte shadow slot. The unwind tables carry this rule for every instrumented frame, so when <code>libunwind</code> walks past <code>deep(0) … middle</code>, it subtracts 8 from <code>x18</code> five times and lands with the shadow pointer perfectly aligned to <code>main</code>'s frame. No runtime shadow-stack code needed — it's static metadata.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>3 · x86-64 — the rule lives in the unwinder <span class="tag arch">Intel CET</span></h2>
+  <p>On x86 the shadow stack is the CPU's, and <code>-fcf-protection=full</code> adds <em>no</em> per-frame shadow instructions — just an <code>endbr64</code> landing pad. So there's no CFI rule to carry. Instead the <b>runtime unwinder itself</b> drives the shadow stack. The binary is marked for CET:</p>
+  <pre class="block"><span class="c">$ readelf -n ./ex_cet</span>
+  Properties: <span class="sh">x86 feature: IBT, SHSTK</span></pre>
+  <p>…and the shadow-stack logic is right there inside <code>libgcc_s</code>, the unwinder that <code>__cxa_throw</code> calls into:</p>
+  <div class="cols">
+    <div>
+      <pre class="block"><span class="c">$ objdump -d /lib64/libgcc_s.so.1 \
+    | grep -oE 'incsspq|rdsspq' | sort | uniq -c</span>
+      <span class="sh">8 incsspq</span>     <span class="c"># pop N shadow slots</span>
+      <span class="sh">4 rdsspq</span>      <span class="c"># read current SSP</span></pre>
+    </div>
+    <div>
+      <p>When the unwinder restores a context that skips several frames, it computes how many return addresses those frames put on the shadow stack and executes <code>incsspq</code> to advance <code>SSP</code> past exactly that many — the dynamic equivalent of AArch64's static <code>x18 −= 8</code> rule. <code>rdsspq</code> reads <code>SSP</code> so it knows where it is. This is why a CET binary can throw across frames without a spurious <code>#CP</code> fault: the unwinder pops the shadow stack for you.</p>
+      <p style="opacity:.7">(On this particular host <code>/proc/cpuinfo</code> has no <code>user_shstk</code>, so CET isn't hardware-live — but the binary is CET-marked and the unwinder path is compiled in, which is what the counts above prove.)</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>4 · Watch both stacks unwind — and what breaks if they don't</h2>
+  <p>Step the throw. Build the call chain, then let the exception unwind. The toggle decides whether the shadow stack is unwound alongside the main stack (what the CFI rule / <code>incsspq</code> actually do) or left behind (the bug they prevent).</p>
+  <div class="legend">
+    <span><b style="color:var(--acc)">blue</b> = live frame</span>
+    <span><b style="color:var(--bad)">red</b> = throwing frame / stale slot</span>
+    <span><b style="color:var(--ok)">green</b> = catch</span>
+    <span><b style="color:var(--warn)">amber</b> = shadow return address</span>
+  </div>
+  <div class="ctrl">
+    <button id="back">◂ Back</button>
+    <button id="step" class="primary">Step ▸</button>
+    <button id="reset">↺ Reset</button>
+    <label class="toggle"><input type="checkbox" id="unwindshadow" checked /> unwind the shadow stack too</label>
+  </div>
+  <div class="stagewrap">
+    <div>
+      <div class="call-tree" id="tree"></div>
+      <div class="stacks">
+        <div class="stackbox"><h3>Main stack</h3><div class="cells" id="mainstack"></div></div>
+        <div class="stackbox"><h3>Shadow stack <span style="color:var(--warn)">(x18 / SSP)</span></h3><div class="cells" id="shadowstack"></div></div>
+      </div>
+    </div>
+    <div class="info" id="info"><h3>Ready.</h3>Press <span style="color:var(--ink)">Step ▸</span> to enter <code>main</code>.</div>
+  </div>
+</section>
+
+<section>
+  <h2>5 · Two answers to the same problem</h2>
+  <table class="regtbl">
+    <tr><th>&nbsp;</th><th>AArch64 · ShadowCallStack</th><th>x86-64 · Intel CET</th></tr>
+    <tr><td>per-frame shadow code</td><td><code>str x30,[x18],#8</code> in each non-leaf</td><td>none (just <code>endbr64</code>)</td></tr>
+    <tr><td>who knows how to unwind it</td><td>the <b>compiler</b> — a <code>.cfi_escape</code> rule per frame</td><td>the <b>runtime unwinder</b> — <code>incsspq</code> in libgcc_s</td></tr>
+    <tr><td>unwind is…</td><td>static metadata (DWARF)</td><td>executed code at throw time</td></tr>
+    <tr><td>shadow pointer</td><td><code>x18</code> (compiler-reserved)</td><td><code>SSP</code> (CPU register)</td></tr>
+  </table>
+  <p style="margin-top:12px">Reproduce:</p>
+  <pre class="block"><span class="c"># x86-64: run both ways, inspect the CET mark + unwinder</span>
+clang++ -O1 -fcf-protection=full ex.cpp -o ex_cet &amp;&amp; ./ex_cet
+readelf -n ./ex_cet | grep SHSTK
+objdump -d /lib64/libgcc_s.so.1 | grep -c incsspq
+
+<span class="c"># AArch64: the shadow push + its unwind rule</span>
+clang --target=aarch64-linux-gnu -fsanitize=shadow-call-stack \
+      -ffixed-x18 -O1 -fno-omit-frame-pointer -S ex.cpp</pre>
+</section>
+
+<footer>
+  Part of the <a href="https://elazarl.github.io/">maayan</a> explainer series · real clang output · x86-64 run over SSH, AArch64 cross-compiled
+</footer>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+
+// Call chain, outermost first. Schematic return addresses (the unwind is dynamic; addresses are illustrative).
+const FUNCS = [
+  {key:'main',   label:'main() — try { } catch',      ret:'0x401300', main:true},
+  {key:'middle', label:'middle()',                     ret:'0x4012a0'},
+  {key:'deep3',  label:'deep(3)',                      ret:'0x401250'},
+  {key:'deep2',  label:'deep(2)',                      ret:'0x401210'},
+  {key:'deep1',  label:'deep(1)',                      ret:'0x4011f0'},
+  {key:'deep0',  label:'deep(0) — throw Boom{42}',     ret:'0x4011c8'},
+];
+const BASE = 0x7ffe0800;
+const addr = i => '0x'+((BASE - i*0x20)>>>0).toString(16);
+
+// Steps: 0..5 build the chain; 6 = throw; 7 = unwind; 8 = caught.
+const STEPS = [
+  {depth:1, phase:'build'}, {depth:2, phase:'build'}, {depth:3, phase:'build'},
+  {depth:4, phase:'build'}, {depth:5, phase:'build'}, {depth:6, phase:'build'},
+  {depth:6, phase:'throw'}, {depth:6, phase:'unwind'}, {depth:1, phase:'caught'},
+];
+
+let ip;
+function paint(i){
+  const s = STEPS[i];
+  const uw = $('#unwindshadow').checked;
+  const active = FUNCS.slice(0, s.phase==='caught'?1:s.depth);
+  const throwing = (s.phase==='throw');
+  const unwound = (s.phase==='unwind' || s.phase==='caught');
+
+  // call tree
+  $('#tree').innerHTML = 'active: ' + FUNCS.slice(0, (unwound?1:s.depth))
+      .map(f=>`<span style="color:var(--ink)">${f.key}</span>`).join(' <span style="color:var(--dim)">▸</span> ');
+
+  // MAIN stack: after unwind, only main remains.
+  const mainFuncs = unwound ? FUNCS.slice(0,1) : active;
+  $('#mainstack').innerHTML = mainFuncs.map((f,idx)=>{
+    const cls = ['cell'];
+    if(throwing && f.key==='deep0') cls.push('throw');
+    if(s.phase==='caught' && f.main) cls.push('catchf');
+    return `<div class="${cls.join(' ')}"><span class="addr">${addr(idx)}</span><span class="name">${f.label}</span></div>`;
+  }).join('');
+
+  // SHADOW stack: built alongside; on unwind it collapses ONLY if uw is on.
+  let shadowFuncs;
+  if(!unwound)            shadowFuncs = active;
+  else if(uw)            shadowFuncs = FUNCS.slice(0,1);   // unwound in lockstep
+  else                   shadowFuncs = active;             // left stale!
+  $('#shadowstack').innerHTML = shadowFuncs.map((f,idx)=>{
+    const stale = (unwound && !uw && !f.main);
+    const cls = ['cell','shadow']; if(stale) cls.push('stale');
+    const tag = (idx===shadowFuncs.length-1) ? ' <span style="font-size:10px;color:var(--warn)">◄ '+(idx>0?'':'')+'x18/SSP</span>' : '';
+    return `<div class="${cls.join(' ')}"><span class="addr">${f.ret}</span><span class="name">${f.key} ret${tag}</span></div>`;
+  }).join('');
+
+  // info
+  const info = $('#info'); info.className='info';
+  let h, body;
+  if(s.phase==='build'){
+    const f = FUNCS[s.depth-1];
+    h = 'Call: '+f.key;
+    body = f.key==='deep0'
+      ? 'The deepest frame is entered. Both stacks now hold six return addresses, one per active frame.'
+      : 'Entering <code>'+f.key+'</code>. Each <code>call</code> pushed a return address to the main stack, and the shadow mechanism pushed a copy to <code>x18</code>/<code>SSP</code>.';
+  } else if(s.phase==='throw'){
+    h='throw Boom{42}';
+    body='<code>deep(0)</code> throws. <code>__cxa_throw</code> hands control to the unwinder, which will search outward for a matching <code>catch</code> — it finds one in <code>main</code>, five frames up. Nothing has been popped yet.';
+  } else if(s.phase==='unwind'){
+    if(uw){ h='Unwind — both stacks, in lockstep';
+      body='The unwinder discards <code>deep(0) … middle</code> from the main stack, and <b>also</b> pops five entries from the shadow stack — via the <code>x18 −= 8</code> CFI rule (AArch64) or <code>incsspq</code> (x86 CET). Both pointers land on <code>main</code>\'s frame, consistent.'; }
+    else{ info.className='info warn'; h='Unwind — shadow stack left behind ⚠';
+      body='The main stack collapsed to <code>main</code>, but the shadow stack was <b>not</b> unwound — it still holds five stale return addresses, and <code>x18</code>/<code>SSP</code> points into freed slots. This is the bug the CFI rule / <code>incsspq</code> exist to prevent.'; }
+  } else { // caught
+    if(uw){ h='caught (b.code = 42) ✔';
+      body='Control resumes in <code>main</code>\'s handler. Both stacks agree, so when <code>main</code> eventually returns, its <code>ret</code> matches the shadow copy and all is well.'; }
+    else{ info.className='info warn'; h='caught — but the shadow stack is corrupt ⚠';
+      body='The handler runs, but the shadow stack is desynced. The next real <code>ret</code> compares against the wrong shadow slot → <span style="color:var(--bad)">#CP fault (x86) / SCS mismatch (AArch64)</span>. Toggle the checkbox on to see the fix.'; }
+  }
+  info.innerHTML = '<h3>'+h+'</h3>'+body;
+
+  $('#back').disabled=i<=0; $('#step').disabled=i>=STEPS.length-1;
+}
+function reset(){ ip=0; paint(0); }
+function step(){ if(ip<STEPS.length-1){ ip++; paint(ip); } }
+function back(){ if(ip>0){ ip--; paint(ip); } }
+$('#step').onclick=step; $('#back').onclick=back; $('#reset').onclick=reset;
+$('#unwindshadow').onchange=()=>paint(ip);
+reset();
+</script>
+</body>
+</html>
