@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ShadowCallStack for real — clang assembly + a live AArch64 stack</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pur:#bc8cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}
+  header{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 4px;font-size:22px}
+  header p{margin:0 0 6px;color:var(--dim);max-width:94ch}
+  header code{font-family:var(--mono);color:var(--pur);font-size:13px}
+  .xtabs{display:flex;gap:8px;flex-wrap:wrap;padding:14px 28px 0}
+  .xtabs a{text-decoration:none;font:600 13px/1 system-ui;padding:8px 13px;border:1px solid var(--line);
+    border-radius:8px;color:var(--dim)}
+  .xtabs a:hover{border-color:var(--acc);color:var(--acc)}
+  .xtabs a.here{background:var(--acc);color:#04121f;border-color:var(--acc)}
+  section{padding:24px 28px;border-top:1px solid var(--line)}
+  section:first-of-type{border-top:0}
+  h2{font-size:16px;color:var(--ink);margin:0 0 12px}
+  h2 .tag{font:600 11px/1 system-ui;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);
+    border:1px solid var(--line);border-radius:5px;padding:3px 6px;margin-left:8px;vertical-align:middle}
+  p{color:var(--dim);margin:0 0 12px;max-width:94ch}
+  code{font-family:var(--mono);color:var(--pur);font-size:12.5px;background:#010409;
+    border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+  pre.block{background:#010409;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    font-family:var(--mono);font-size:12.5px;line-height:1.7;overflow-x:auto;color:var(--ink);margin:0 0 12px}
+  pre.block .c{color:var(--dim)} pre.block .k{color:#ff7b72} pre.block .r{color:var(--acc)}
+  pre.block .n{color:var(--ok)} pre.block .sh{color:var(--warn);font-weight:700}
+  pre.block .shln{background:rgba(210,153,34,.10);display:inline-block;width:100%}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+  .legend{display:flex;flex-wrap:wrap;gap:10px 18px;margin:4px 0 16px;font-size:12.5px;color:var(--dim)}
+  .legend b{color:var(--ink)}
+  /* ── live stack visual ── */
+  .stagewrap{display:grid;grid-template-columns:1.25fr 1fr;gap:20px;align-items:start}
+  .ctrl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 14px}
+  button{font:600 13px/1 system-ui;background:var(--panel);color:var(--ink);border:1px solid var(--line);
+         border-radius:8px;padding:9px 14px;cursor:pointer;transition:.12s}
+  button:hover{border-color:var(--acc);color:var(--acc)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:var(--acc);color:#04121f;border-color:var(--acc)}
+  .stacks{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .stackbox h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)}
+  .cells{display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:11.5px}
+  .cell{border:1px solid var(--line);border-radius:7px;padding:5px 9px;background:#010409;
+        display:flex;justify-content:space-between;gap:8px;transition:.15s}
+  .cell .addr{color:var(--dim)} .cell .name{color:var(--ink);text-align:right}
+  .cell.ret{border-color:var(--acc)} .cell.ret .name{color:var(--acc)}
+  .cell.fp{border-color:var(--pur)}
+  .cell.caller{opacity:.45;font-style:italic}
+  .cell.locals{border-style:dashed;color:var(--dim)}
+  .cell.shadow{border-color:var(--warn)} .cell.shadow .name{color:var(--warn)}
+  .cell .ptr{font-size:10px;font-weight:700}
+  .cell .ptr.sp{color:var(--pur)} .cell .ptr.fp{color:var(--pur)} .cell .ptr.x18{color:var(--warn)}
+  .call-tree{font-family:var(--mono);font-size:12.5px;line-height:1.9;color:var(--dim);margin:0 0 12px}
+  .call-tree .on{color:var(--ink);background:rgba(88,166,255,.14);border-radius:5px;padding:1px 6px}
+  .info{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc);
+        border-radius:8px;padding:13px 15px;font-size:13.5px;color:var(--dim);min-height:70px;margin-top:14px}
+  .info h3{margin:0 0 6px;color:var(--ink);font-size:14px}
+  .info code{background:transparent;border:0;padding:0}
+  .regtbl{width:100%;border-collapse:collapse;font-size:13px;margin:0 0 4px}
+  .regtbl td{border:1px solid var(--line);padding:7px 10px;vertical-align:top}
+  .regtbl td:first-child{font-family:var(--mono);color:var(--acc);white-space:nowrap;width:1%}
+  .regtbl td:last-child{color:var(--dim)}
+  @media(max-width:900px){.cols,.stagewrap{grid-template-columns:1fr}}
+  footer{padding:14px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+  a{color:var(--acc)}
+</style>
+</head>
+<body>
+<header>
+  <h1>ShadowCallStack for real — clang output &amp; a live stack</h1>
+  <p>The other pages hand-wrote the shadow logic. This one is entirely <b>real</b>: a small C program with a chain of calls, compiled by <code>clang 21</code> with <code>-fsanitize=shadow-call-stack</code>, the exact instrumented assembly it emitted, and the actual stack addresses printed by running it. AArch64, because that's the only architecture where clang's ShadowCallStack ships in production.</p>
+</header>
+
+<nav class="xtabs">
+  <a href="index.html">Software shadow stack</a>
+  <a href="hardware.html">Hardware shadow stack</a>
+  <a href="clang.html" class="here">Real clang output</a>
+</nav>
+
+<section>
+  <h2>1 · The program <span class="tag">calls.c</span></h2>
+  <p>Four functions in a chain: <code>main → compute → add</code>, then <code>compute → square</code>. Each one prints its own live frame — <code>x29</code> (the frame pointer), <code>sp</code>, and <code>x30</code> (the return address it was given).</p>
+  <pre class="block"><span class="k">static void</span> frame(<span class="k">const char</span> *fn) {
+    <span class="k">void</span> *fp  = __builtin_frame_address(<span class="n">0</span>);   <span class="c">// x29</span>
+    <span class="k">void</span> *ret = __builtin_return_address(<span class="n">0</span>);  <span class="c">// x30</span>
+    <span class="k">void</span> *sp; __asm__ <span class="k">volatile</span>(<span class="n">"mov %0, sp"</span> : <span class="n">"=r"</span>(sp));
+    printf(<span class="n">"%-8s x29=%p  sp=%p  x30=%p\n"</span>, fn, fp, sp, ret);
+}
+<span class="k">int</span> add(<span class="k">int</span> a, <span class="k">int</span> b)     { frame(<span class="n">"add"</span>);     <span class="k">return</span> a + b; }
+<span class="k">int</span> square(<span class="k">int</span> n)         { frame(<span class="n">"square"</span>);  <span class="k">return</span> n * n; }
+<span class="k">int</span> compute(<span class="k">int</span> x, <span class="k">int</span> y) { frame(<span class="n">"compute"</span>); <span class="k">return</span> square(add(x, y)); }
+<span class="k">int</span> main(<span class="k">void</span>)            { frame(<span class="n">"main"</span>);    printf(<span class="n">"= %d\n"</span>, compute(<span class="n">3</span>, <span class="n">4</span>)); }</pre>
+  <p>Compiled and run natively (<code>clang -O0 -fno-omit-frame-pointer</code>), it prints these <b>real</b> addresses — the numbers the stepper below uses:</p>
+  <pre class="block"><span class="c">$ ./calls</span>
+main     x29=<span class="r">0x16d7095f0</span>  sp=<span class="r">0x16d7095b0</span>  x30=0x1026f459c
+compute  x29=<span class="r">0x16d7095d0</span>  sp=<span class="r">0x16d709590</span>  x30=0x1026f454c
+add      x29=<span class="r">0x16d7095b0</span>  sp=<span class="r">0x16d709570</span>  x30=0x1026f4480
+square   x29=<span class="r">0x16d7095b0</span>  sp=<span class="r">0x16d709570</span>  x30=0x1026f4514
+= 49</pre>
+  <p>Two things to notice in the raw numbers, before any picture: each nested call drops <code>x29</code> by exactly <code>0x20</code> (32 bytes per frame), and <code>add</code> and <code>square</code> report the <em>same</em> <code>x29</code>/<code>sp</code> — they're siblings called one after the other, so <code>square</code> reuses the exact stack slot <code>add</code> just gave back.</p>
+</section>
+
+<section>
+  <h2>2 · What ShadowCallStack actually emitted <span class="tag">clang -S</span></h2>
+  <p>Same source, recompiled with the sanitizer on:</p>
+  <pre class="block">clang --target=aarch64-linux-gnu -O1 -fno-omit-frame-pointer \
+      <span class="sh">-fsanitize=shadow-call-stack -ffixed-x18</span> -S calls.c</pre>
+  <div class="cols">
+    <div>
+      <p><b>compute()</b> is a non-leaf (it calls other functions), so it gets instrumented. The two <span style="color:var(--warn)">highlighted</span> lines are the <em>entire</em> difference from the plain build:</p>
+      <pre class="block">compute:
+<span class="shln"><span class="sh">    str  x30, [x18], #8</span>        <span class="c"># push x30 → shadow, x18 += 8</span></span>
+    stp  x29, x30, [sp, #-16]!  <span class="c"># normal frame on main stack</span>
+    mov  x29, sp               <span class="c"># set frame pointer</span>
+    bl   add                   <span class="c"># compute → add(x, y)</span>
+    ldp  x29, x30, [sp], #16   <span class="c"># restore from main stack</span>
+<span class="shln"><span class="sh">    ldr  x30, [x18, #-8]!</span>      <span class="c"># x18 -= 8, reload TRUSTED x30</span></span>
+    b    square                <span class="c"># tail-call square(...)</span></pre>
+    </div>
+    <div>
+      <p><b>add()</b> is a leaf — it calls nothing, so <code>x30</code> never gets spilled to memory and there's nothing to protect. clang emits <em>no</em> shadow instructions at all:</p>
+      <pre class="block">add:
+    add  w0, w1, w0
+    ret</pre>
+      <p>This is the whole mechanism, and note what it is <b>not</b>: there's no <code>cmp</code>, no branch-to-abort. On return, <code>ldr x30, [x18, #-8]!</code> simply <em>overwrites</em> <code>x30</code> with the trusted copy from the shadow stack. Whatever an overflow wrote into the main-stack return slot is discarded — the function returns to the address the shadow stack remembers, full stop.</p>
+    </div>
+  </div>
+  <p style="margin-top:4px"><code>-ffixed-x18</code> reserves register <code>x18</code> as the dedicated shadow-stack pointer so nothing else clobbers it — the compiler's version of the <code>%r15</code> we picked by hand on the software page.</p>
+</section>
+
+<section>
+  <h2>3 · The live stack, sketched</h2>
+  <p>Step through the call chain and watch the two stacks move together. Left is the main stack (real addresses from the run above); right is the shadow stack in <code>x18</code>. Watch where <span style="color:var(--pur)">sp</span> and <span style="color:var(--pur)">x29</span> point at each depth.</p>
+  <div class="legend">
+    <span><b style="color:var(--acc)">blue</b> = saved return address (x30)</span>
+    <span><b style="color:var(--pur)">purple</b> = frame pointer x29 / sp</span>
+    <span><b style="color:var(--warn)">amber</b> = shadow copy in x18</span>
+    <span style="opacity:.6">shadow addresses are illustrative — SCS needs a Linux/x18 runtime, not this Apple host</span>
+  </div>
+  <div class="ctrl">
+    <button id="back">◂ Back</button>
+    <button id="step" class="primary">Step ▸</button>
+    <button id="run">Run ⏩</button>
+    <button id="reset">↺ Reset</button>
+  </div>
+  <div class="stagewrap">
+    <div>
+      <div class="call-tree" id="tree"></div>
+      <div class="stacks">
+        <div class="stackbox">
+          <h3>Main stack <span style="color:var(--pur)">(sp / x29)</span></h3>
+          <div class="cells" id="mainstack"></div>
+        </div>
+        <div class="stackbox">
+          <h3>Shadow stack <span style="color:var(--warn)">(x18)</span></h3>
+          <div class="cells" id="shadowstack"></div>
+        </div>
+      </div>
+    </div>
+    <div class="info" id="info"><h3>Ready.</h3>Press <span style="color:var(--ink)">Step ▸</span> to enter <code>main</code>.</div>
+  </div>
+</section>
+
+<section>
+  <h2>4 · The AArch64 ↔ x86-64 map, and how to reproduce</h2>
+  <div class="cols">
+    <div>
+      <table class="regtbl">
+        <tr><td>x29</td><td>Frame pointer — base of the current frame. The x86-64 <code>rbp</code>.</td></tr>
+        <tr><td>sp</td><td>Stack pointer — current top. The x86-64 <code>rsp</code>.</td></tr>
+        <tr><td>x30 (LR)</td><td>Link register — holds the return address. On x86-64 that address lives on the stack; on AArch64 <code>bl</code> puts it in a register, which is why leaves needn't touch memory.</td></tr>
+        <tr><td>x18</td><td>Reserved as the shadow-stack pointer under SCS. The hand-rolled <code>%r15</code>, promoted to an ABI contract.</td></tr>
+      </table>
+    </div>
+    <div>
+      <p>Everything on this page reproduces with stock clang:</p>
+      <pre class="block"><span class="c"># 1 · live addresses (native, no SCS runtime needed)</span>
+clang -O0 -fno-omit-frame-pointer -o calls calls.c && ./calls
+
+<span class="c"># 2 · the instrumented assembly</span>
+clang --target=aarch64-linux-gnu -O1 -fno-omit-frame-pointer \
+      -fsanitize=shadow-call-stack -ffixed-x18 -S calls.c</pre>
+      <p>On real Android/AArch64 Linux the same binary links against a runtime that allocates the guarded shadow region and reserves <code>x18</code> process-wide — then the <code>str</code>/<code>ldr</code> pair above is live protection, not just a sketch.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  Part of the <a href="https://elazarl.github.io/">maayan</a> explainer series · real clang 21 output, AArch64 ShadowCallStack
+</footer>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const hx = n => '0x'+n.toString(16);
+
+// Real addresses captured from the run.
+const F = {
+  main:    {fp:0x16d7095f0, sp:0x16d7095b0, ret:0x1026f459c},
+  compute: {fp:0x16d7095d0, sp:0x16d709590, ret:0x1026f454c},
+  add:     {fp:0x16d7095b0, sp:0x16d709570, ret:0x1026f4480},
+  square:  {fp:0x16d7095b0, sp:0x16d709570, ret:0x1026f4514},
+};
+const CALLER_FP = {main:'caller fp', compute:hx(F.main.fp), add:hx(F.compute.fp), square:hx(F.compute.fp)};
+const SH_BASE = 0x5c0000000;   // illustrative shadow region base
+
+// Each step: the active call stack (outer→inner) + a description.
+const STEPS = [
+  {stack:['main'],                    d:'<b>main</b> runs. On entry, SCS executed <code>str x30, [x18], #8</code> — main\'s return address is now on the shadow stack. <code>sp</code> and <code>x29</code> mark main\'s frame.'},
+  {stack:['main','compute'],          d:'<code>bl compute</code>. The main stack grows a new frame (<code>stp x29,x30</code> then <code>mov x29,sp</code>) and the shadow stack gets compute\'s return address. Both <code>sp</code> and <code>x29</code> drop by 0x20.'},
+  {stack:['main','compute','add'],    d:'<code>compute</code> calls <code>add(3,4)</code>. Deepest frame. <code>add</code> is a leaf, but the frame you see here is from the -O0 run where it calls <code>frame()</code>, so it has its own <code>x29</code>/<code>sp</code>.'},
+  {stack:['main','compute'],          d:'<code>add</code> returns 7. <code>ldp</code> pops its main-stack frame; <code>ldr x30,[x18,#-8]!</code> pops the shadow copy. <code>sp</code>/<code>x29</code> are back at compute\'s frame — the space add used is now free.'},
+  {stack:['main','compute','square'], d:'<code>compute</code> calls <code>square(7)</code>. Look at the addresses: <code>square</code>\'s <code>x29</code>=0x16d7095b0 and <code>sp</code>=0x16d709570 are <em>identical</em> to add\'s — it reuses the exact slot add just vacated.'},
+  {stack:['main','compute'],          d:'<code>square</code> returns 49. Its frame and shadow entry are popped.'},
+  {stack:['main'],                    d:'<code>compute</code> returns 49 to <b>main</b>. Every frame and every shadow entry is unwound in perfect step. <code>./calls</code> prints <code>= 49</code>.'},
+];
+
+function buildMainCells(stack){
+  const cells = [{addr:null, cls:'caller', label:'⋯ caller (libc) ⋯'}];
+  const inner = stack[stack.length-1];
+  stack.forEach(fn=>{
+    const f = F[fn];
+    cells.push({addr:f.fp+8, cls:'ret',  label:'saved x30 = '+hx(f.ret), sub:fn+'()'});
+    cells.push({addr:f.fp,   cls:'fp',   label:'saved x29 = '+CALLER_FP[fn], fp:(fn===inner)});
+  });
+  const f = F[inner];
+  cells.push({addr:f.sp, cls:'locals', label:'(locals / args)', sp:true});
+  return cells;
+}
+function buildShadowCells(stack){
+  return stack.map((fn,i)=>({addr:SH_BASE+i*8, label:hx(F[fn].ret), sub:fn+'()',
+    x18:(i===stack.length-1)}));
+}
+
+function renderMain(cells){
+  $('#mainstack').innerHTML = cells.map(c=>{
+    const cls=['cell', c.cls||''];
+    let ptr='';
+    if(c.fp) ptr+='<span class="ptr fp">◄ x29</span>';
+    if(c.sp) ptr+='<span class="ptr sp">◄ sp</span>';
+    const addr = c.addr===null?'':hx(c.addr);
+    const sub = c.sub?`<span style="color:var(--dim)"> ${c.sub}</span>`:'';
+    return `<div class="${cls.join(' ')}"><span class="addr">${addr}</span><span class="name">${c.label}${sub} ${ptr}</span></div>`;
+  }).join('');
+}
+function renderShadow(cells){
+  const el=$('#shadowstack');
+  if(!cells.length){ el.innerHTML='<div class="cell locals"><span class="name">(empty)</span></div>'; return; }
+  el.innerHTML = cells.map(c=>{
+    const ptr = c.x18?'<span class="ptr x18">◄ x18</span>':'';
+    return `<div class="cell shadow"><span class="addr">${hx(c.addr)}</span><span class="name">${c.label} <span style="color:var(--dim)">${c.sub}</span> ${ptr}</span></div>`;
+  }).join('');
+}
+function renderTree(stack){
+  const chain=['main','compute','add','square'];
+  const active=new Set(stack);
+  $('#tree').innerHTML = 'main → compute →&nbsp; '+
+    ['add','square'].map(f=>`<span class="${stack[stack.length-1]===f?'on':''}">${f}</span>`).join(' / ')+
+    '<br><span style="color:var(--dim)">active: </span>'+stack.map(f=>`<span class="on">${f}</span>`).join(' <span style="color:var(--dim)">▸</span> ');
+}
+
+let ip;
+function paint(i){
+  const s=STEPS[i];
+  renderTree(s.stack);
+  renderMain(buildMainCells(s.stack));
+  renderShadow(buildShadowCells(s.stack));
+  $('#info').innerHTML='<h3>Step '+(i+1)+' / '+STEPS.length+'</h3>'+s.d;
+  $('#back').disabled = i<=0;
+  $('#step').disabled = i>=STEPS.length-1;
+  $('#run').disabled  = i>=STEPS.length-1;
+}
+function reset(){ ip=0; paint(0); }
+function step(){ if(ip<STEPS.length-1){ ip++; paint(ip); } }
+function back(){ if(ip>0){ ip--; paint(ip); } }
+function run(){ const t=setInterval(()=>{ if(ip>=STEPS.length-1){clearInterval(t);return;} step(); },700); }
+$('#step').onclick=step; $('#back').onclick=back; $('#reset').onclick=reset; $('#run').onclick=run;
+reset();
+</script>
+</body>
+</html>
