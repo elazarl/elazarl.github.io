@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>x86-64 clang — no software shadow stack, so the CPU does it (CET)</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pur:#bc8cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}
+  header{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 4px;font-size:22px}
+  header p{margin:0 0 6px;color:var(--dim);max-width:94ch}
+  header code{font-family:var(--mono);color:var(--pur);font-size:13px}
+  .xtabs{display:flex;gap:8px;flex-wrap:wrap;padding:14px 28px 0}
+  .xtabs a{text-decoration:none;font:600 13px/1 system-ui;padding:8px 13px;border:1px solid var(--line);
+    border-radius:8px;color:var(--dim)}
+  .xtabs a:hover{border-color:var(--acc);color:var(--acc)}
+  .xtabs a.here{background:var(--acc);color:#04121f;border-color:var(--acc)}
+  section{padding:24px 28px;border-top:1px solid var(--line)}
+  section:first-of-type{border-top:0}
+  h2{font-size:16px;color:var(--ink);margin:0 0 12px}
+  h2 .tag{font:600 11px/1 system-ui;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);
+    border:1px solid var(--line);border-radius:5px;padding:3px 6px;margin-left:8px;vertical-align:middle}
+  p{color:var(--dim);margin:0 0 12px;max-width:94ch}
+  code{font-family:var(--mono);color:var(--pur);font-size:12.5px;background:#010409;
+    border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+  pre.block{background:#010409;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    font-family:var(--mono);font-size:12.5px;line-height:1.7;overflow-x:auto;color:var(--ink);margin:0 0 12px}
+  pre.block .c{color:var(--dim)} pre.block .k{color:#ff7b72} pre.block .r{color:var(--acc)}
+  pre.block .n{color:var(--ok)} pre.block .sh{color:var(--warn);font-weight:700}
+  pre.block .shln{background:rgba(210,153,34,.10);display:inline-block;width:100%}
+  pre.block .bad{color:var(--bad);font-weight:700}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+  .legend{display:flex;flex-wrap:wrap;gap:10px 18px;margin:4px 0 16px;font-size:12.5px;color:var(--dim)}
+  .legend b{color:var(--ink)}
+  .stagewrap{display:grid;grid-template-columns:1.25fr 1fr;gap:20px;align-items:start}
+  .ctrl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 14px}
+  button{font:600 13px/1 system-ui;background:var(--panel);color:var(--ink);border:1px solid var(--line);
+         border-radius:8px;padding:9px 14px;cursor:pointer;transition:.12s}
+  button:hover{border-color:var(--acc);color:var(--acc)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:var(--acc);color:#04121f;border-color:var(--acc)}
+  .stacks{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .stackbox h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)}
+  .cells{display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:11.5px}
+  .cell{border:1px solid var(--line);border-radius:7px;padding:5px 9px;background:#010409;
+        display:flex;justify-content:space-between;gap:8px;transition:.15s}
+  .cell .addr{color:var(--dim)} .cell .name{color:var(--ink);text-align:right}
+  .cell.ret{border-color:var(--acc)} .cell.ret .name{color:var(--acc)}
+  .cell.fp{border-color:var(--pur)}
+  .cell.caller{opacity:.45;font-style:italic}
+  .cell.locals{border-style:dashed;color:var(--dim)}
+  .cell.shadow{border-color:var(--warn)} .cell.shadow .name{color:var(--warn)}
+  .cell .ptr{font-size:10px;font-weight:700}
+  .cell .ptr.sp{color:var(--pur)} .cell .ptr.fp{color:var(--pur)} .cell .ptr.ssp{color:var(--warn)}
+  .call-tree{font-family:var(--mono);font-size:12.5px;line-height:1.9;color:var(--dim);margin:0 0 12px}
+  .call-tree .on{color:var(--ink);background:rgba(88,166,255,.14);border-radius:5px;padding:1px 6px}
+  .info{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc);
+        border-radius:8px;padding:13px 15px;font-size:13.5px;color:var(--dim);min-height:70px;margin-top:14px}
+  .info h3{margin:0 0 6px;color:var(--ink);font-size:14px}
+  .info code{background:transparent;border:0;padding:0}
+  .regtbl{width:100%;border-collapse:collapse;font-size:13px;margin:0 0 4px}
+  .regtbl td,.regtbl th{border:1px solid var(--line);padding:7px 10px;vertical-align:top;text-align:left}
+  .regtbl th{color:var(--ink);font-size:12px}
+  .regtbl td:first-child{font-family:var(--mono);color:var(--acc);white-space:nowrap}
+  @media(max-width:900px){.cols,.stagewrap{grid-template-columns:1fr}}
+  footer{padding:14px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+  a{color:var(--acc)}
+</style>
+</head>
+<body>
+<header>
+  <h1>x86-64: clang has no software shadow stack — so the CPU keeps it</h1>
+  <p>The AArch64 page showed clang emitting an explicit shadow push/pop around every call. On <b>x86-64 that instrumentation doesn't exist</b>: <code>-fsanitize=shadow-call-stack</code> is silently accepted but emits nothing. The return-address defense on x86 is <b>Intel CET</b> — a hardware shadow stack the compiler only has to opt into with <code>endbr64</code>. Everything below was compiled and run on a real x86-64 Linux box (CentOS 9, clang 20) over SSH.</p>
+</header>
+
+<nav class="xtabs">
+  <a href="index.html">Software shadow stack</a>
+  <a href="hardware.html">Hardware shadow stack</a>
+  <a href="clang.html">clang · AArch64</a>
+  <a href="x86.html" class="here">clang · x86-64</a>
+</nav>
+
+<section>
+  <h2>1 · The same program, on x86-64 <span class="tag">calls.c</span></h2>
+  <p>Identical call chain — <code>main → compute → add</code>, then <code>compute → square</code> — but <code>frame()</code> now reads <code>%rsp</code> directly. Compiled and run natively on the x86 host:</p>
+  <pre class="block"><span class="k">static void</span> frame(<span class="k">const char</span> *fn) {
+    <span class="k">void</span> *rbp = __builtin_frame_address(<span class="n">0</span>);
+    <span class="k">void</span> *ret = __builtin_return_address(<span class="n">0</span>);
+    <span class="k">void</span> *rsp; __asm__ <span class="k">volatile</span>(<span class="n">"mov %%rsp, %0"</span> : <span class="n">"=r"</span>(rsp));
+    printf(<span class="n">"%-8s rbp=%p  rsp=%p  ret=%p\n"</span>, fn, rbp, rsp, ret);
+}</pre>
+  <pre class="block"><span class="c">$ ssh home 'clang -O0 -fno-omit-frame-pointer calls.c -o calls && ./calls'</span>
+main     rbp=<span class="r">0x7ffff9005810</span>  rsp=<span class="r">0x7ffff90057f0</span>  ret=0x40123e
+compute  rbp=<span class="r">0x7ffff90057f0</span>  rsp=<span class="r">0x7ffff90057d0</span>  ret=0x4011fd
+add      rbp=<span class="r">0x7ffff90057d0</span>  rsp=<span class="r">0x7ffff90057b0</span>  ret=0x40114d
+square   rbp=<span class="r">0x7ffff90057d0</span>  rsp=<span class="r">0x7ffff90057b0</span>  ret=0x4011ca
+= 49</pre>
+  <p>Same shape as AArch64: 0x20 per frame, and <code>add</code>/<code>square</code> sharing a frame as siblings. The one x86 difference that matters here — the return address <code>ret</code> is <em>pushed onto the main stack by <code>call</code></em> (it sits just above the saved <code>rbp</code>), whereas AArch64 keeps it in the <code>x30</code> register until a non-leaf spills it. That stack-resident return address is exactly what an overflow reaches.</p>
+</section>
+
+<section>
+  <h2>2 · Why there's no clang shadow stack on x86 <span class="tag">verified</span></h2>
+  <div class="cols">
+    <div>
+      <p>Ask clang for ShadowCallStack on x86-64 and it takes the flag without complaint — but the generated code is <b>byte-for-byte identical</b> to the plain build:</p>
+      <pre class="block"><span class="c"># both produce the same assembly for compute()</span>
+clang -O1 -S compute.c
+clang -O1 <span class="sh">-fsanitize=shadow-call-stack</span> -S compute.c
+<span class="c"># diff → no difference. It is a silent no-op.</span></pre>
+      <p>The x86-64 SCS backend was removed years ago: with the return address on the stack and the shadow pointer forced into a general register an attacker can locate and spill, it couldn't be made robust. x86 was handed to hardware instead.</p>
+    </div>
+    <div>
+      <p>What you use instead is <code>-fcf-protection=full</code>, which makes the binary Intel-CET-ready. In the function body that adds exactly one thing — an <code>endbr64</code> landing pad — and <b>no</b> shadow push/pop, because the CPU does that itself on <code>call</code>/<code>ret</code>:</p>
+      <pre class="block">compute:
+<span class="shln"><span class="sh">    endbr64</span>                <span class="c"># CET landing pad</span></span>
+    pushq  %rbp
+    movq   %rsp, %rbp
+    callq  add            <span class="c"># CPU pushes ret to SSP too</span>
+    movl   %eax, %edi
+    popq   %rbp
+    jmp    square         <span class="c"># tail call</span></pre>
+      <p>Compare the <a href="clang.html">AArch64 page</a>: there clang emitted <code>str x30, [x18]</code> / <code>ldr x30, [x18,#-8]!</code> by hand. Here that work is invisible — it's the silicon.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>3 · The software option that <em>does</em> work on x86: SafeStack <span class="tag">-fsanitize=safe-stack</span></h2>
+  <p>x86 isn't defenseless in software — it just doesn't copy return addresses. SafeStack instead <b>moves the dangerous data away</b>: any local whose address is taken (a buffer you can overflow) goes on a separate "unsafe" stack, while return addresses and spills stay on the normal stack an overflow can no longer reach. Here's the real prologue clang emits for a <code>greet()</code> that <code>strcpy</code>s into <code>char buf[16]</code>:</p>
+  <div class="cols">
+    <div>
+      <pre class="block">greet:
+    pushq %rbp
+    movq  %rsp, %rbp
+    ...
+<span class="shln">    movq  <span class="sh">__safestack_unsafe_stack_ptr</span>@GOTTPOFF(%rip), %r14</span>
+<span class="shln">    movq  <span class="sh">%fs:(%r14)</span>, %r15        <span class="c"># load unsafe SP from TLS</span></span>
+    leaq  -16(%r15), %rbx      <span class="c"># carve 16 bytes for buf[16]</span>
+    movq  %rbx, %fs:(%r14)     <span class="c"># commit the unsafe SP</span>
+    movq  %rbx, %rdi
+    callq strcpy               <span class="c"># buf lives on the UNSAFE stack</span>
+    ...
+    movq  %r15, %fs:(%r14)     <span class="c"># restore unsafe SP</span>
+    popq  %rbp
+    retq                       <span class="c"># return addr was never near buf</span></pre>
+    </div>
+    <div>
+      <p>Read it top to bottom: the unsafe stack pointer lives in thread-local storage (<code>%fs:</code>), the 16-byte buffer is allocated there via <code>leaq -16(%r15)</code>, and <code>strcpy</code> writes into <em>that</em> region. Meanwhile <code>retq</code> still pops its return address from the ordinary stack — which the buffer overflow can no longer touch, because <code>buf</code> isn't next to it anymore.</p>
+      <p>It's a different bet than a shadow stack: rather than keep a second copy of the return address and check it, SafeStack makes sure the overflow and the return address never share a neighborhood. Ships in clang for x86-64 today.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>4 · The live x86-64 stack, sketched</h2>
+  <p>Step the call chain using the real addresses from the run. Left is the main stack; right is the <b>CET hardware shadow stack</b> (<code>SSP</code>) that a CET-enabled process would keep in lockstep. Watch <span style="color:var(--pur)">rsp</span> and <span style="color:var(--pur)">rbp</span>.</p>
+  <div class="legend">
+    <span><b style="color:var(--acc)">blue</b> = return address (pushed by <code>call</code>)</span>
+    <span><b style="color:var(--pur)">purple</b> = rbp / rsp</span>
+    <span><b style="color:var(--warn)">amber</b> = CET shadow copy (SSP)</span>
+    <span style="opacity:.6">SSP addresses are illustrative; the return addresses in it are the real ones</span>
+  </div>
+  <div class="ctrl">
+    <button id="back">◂ Back</button>
+    <button id="step" class="primary">Step ▸</button>
+    <button id="run">Run ⏩</button>
+    <button id="reset">↺ Reset</button>
+  </div>
+  <div class="stagewrap">
+    <div>
+      <div class="call-tree" id="tree"></div>
+      <div class="stacks">
+        <div class="stackbox">
+          <h3>Main stack <span style="color:var(--pur)">(rsp / rbp)</span></h3>
+          <div class="cells" id="mainstack"></div>
+        </div>
+        <div class="stackbox">
+          <h3>Shadow stack <span style="color:var(--warn)">(SSP · CET)</span></h3>
+          <div class="cells" id="shadowstack"></div>
+        </div>
+      </div>
+    </div>
+    <div class="info" id="info"><h3>Ready.</h3>Press <span style="color:var(--ink)">Step ▸</span> to enter <code>main</code>.</div>
+  </div>
+</section>
+
+<section>
+  <h2>5 · AArch64 vs x86-64, and how to reproduce</h2>
+  <table class="regtbl">
+    <tr><th>&nbsp;</th><th>AArch64</th><th>x86-64</th></tr>
+    <tr><td>compiler shadow stack</td><td><code>-fsanitize=shadow-call-stack</code> — real, uses <code>x18</code></td><td>flag exists but is a <b>no-op</b></td></tr>
+    <tr><td>return address at rest</td><td>register <code>x30</code> (spilled only by non-leaves)</td><td>always on the stack (pushed by <code>call</code>)</td></tr>
+    <tr><td>hardware shadow stack</td><td>GCS (<code>FEAT_GCS</code>, Armv9.4)</td><td>Intel CET (<code>SSP</code>), <code>-fcf-protection</code></td></tr>
+    <tr><td>software alternative</td><td>—</td><td>SafeStack (<code>-fsanitize=safe-stack</code>)</td></tr>
+  </table>
+  <p style="margin-top:12px">Reproduce on any x86-64 Linux box with clang:</p>
+  <pre class="block"><span class="c"># live addresses</span>
+clang -O0 -fno-omit-frame-pointer calls.c -o calls && ./calls
+<span class="c"># CET-ready assembly (note endbr64, no shadow push)</span>
+clang -O1 -fcf-protection=full -S calls.c
+<span class="c"># SafeStack prologue</span>
+clang -O1 -fsanitize=safe-stack -S greet.c</pre>
+</section>
+
+<footer>
+  Part of the <a href="https://elazarl.github.io/">maayan</a> explainer series · real clang 20 output, compiled &amp; run on x86-64 Linux
+</footer>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const hx = n => '0x'+n.toString(16);
+
+// Real addresses captured from the x86-64 run.
+const F = {
+  main:    {rbp:0x7ffff9005810, rsp:0x7ffff90057f0, ret:0x40123e},
+  compute: {rbp:0x7ffff90057f0, rsp:0x7ffff90057d0, ret:0x4011fd},
+  add:     {rbp:0x7ffff90057d0, rsp:0x7ffff90057b0, ret:0x40114d},
+  square:  {rbp:0x7ffff90057d0, rsp:0x7ffff90057b0, ret:0x4011ca},
+};
+const CALLER_FP = {main:'caller rbp', compute:hx(F.main.rbp), add:hx(F.compute.rbp), square:hx(F.compute.rbp)};
+const SH_BASE = 0x7ffff7a00000;   // illustrative CET shadow region
+
+const STEPS = [
+  {stack:['main'],                    d:'<b>main</b> runs. Under CET, main\'s return address is already on the shadow stack (the CPU pushed it when main was called). <code>rsp</code> and <code>rbp</code> bracket main\'s frame.'},
+  {stack:['main','compute'],          d:'<code>call compute</code> pushes the return address onto the main stack (just above the new saved <code>rbp</code>) <em>and</em> onto the CET shadow stack. <code>rsp</code>/<code>rbp</code> drop by 0x20.'},
+  {stack:['main','compute','add'],    d:'<code>compute</code> calls <code>add(3,4)</code> — deepest frame. Both stacks now hold three return addresses.'},
+  {stack:['main','compute'],          d:'<code>add</code> returns 7. <code>ret</code> pops the return address from the main stack; the CPU simultaneously pops the shadow copy and checks they match. They do → clean return to compute.'},
+  {stack:['main','compute','square'], d:'<code>compute</code> calls <code>square(7)</code>. Note <code>square</code>\'s <code>rbp</code>=0x7ffff90057d0 / <code>rsp</code>=0x7ffff90057b0 are identical to add\'s — it reuses the slot add just freed.'},
+  {stack:['main','compute'],          d:'<code>square</code> returns 49. Main-stack pop and shadow-stack pop stay in lockstep.'},
+  {stack:['main'],                    d:'<code>compute</code> returns 49 to <b>main</b>. If an overflow had rewritten any return slot on the left, the CPU\'s shadow copy on the right would disagree on <code>ret</code> and raise <span style="color:var(--bad)">#CP</span>. <code>./calls</code> prints <code>= 49</code>.'},
+];
+
+function buildMainCells(stack){
+  const cells = [{addr:null, cls:'caller', label:'⋯ caller (libc) ⋯'}];
+  const inner = stack[stack.length-1];
+  stack.forEach(fn=>{
+    const f = F[fn];
+    cells.push({addr:f.rbp+8, cls:'ret', label:'return addr = '+hx(f.ret), sub:fn+'()'});
+    cells.push({addr:f.rbp,   cls:'fp',  label:'saved rbp = '+CALLER_FP[fn], fp:(fn===inner)});
+  });
+  cells.push({addr:F[inner].rsp, cls:'locals', label:'(locals / args)', sp:true});
+  return cells;
+}
+function buildShadowCells(stack){
+  return stack.map((fn,i)=>({addr:SH_BASE+i*8, label:hx(F[fn].ret), sub:fn+'()',
+    ssp:(i===stack.length-1)}));
+}
+function renderMain(cells){
+  $('#mainstack').innerHTML = cells.map(c=>{
+    const cls=['cell', c.cls||''];
+    let ptr='';
+    if(c.fp) ptr+='<span class="ptr fp">◄ rbp</span>';
+    if(c.sp) ptr+='<span class="ptr sp">◄ rsp</span>';
+    const addr = c.addr===null?'':hx(c.addr);
+    const sub = c.sub?`<span style="color:var(--dim)"> ${c.sub}</span>`:'';
+    return `<div class="${cls.join(' ')}"><span class="addr">${addr}</span><span class="name">${c.label}${sub} ${ptr}</span></div>`;
+  }).join('');
+}
+function renderShadow(cells){
+  $('#shadowstack').innerHTML = cells.map(c=>{
+    const ptr = c.ssp?'<span class="ptr ssp">◄ SSP</span>':'';
+    return `<div class="cell shadow"><span class="addr">${hx(c.addr)}</span><span class="name">${c.label} <span style="color:var(--dim)">${c.sub}</span> ${ptr}</span></div>`;
+  }).join('');
+}
+function renderTree(stack){
+  $('#tree').innerHTML = 'main → compute →&nbsp; '+
+    ['add','square'].map(f=>`<span class="${stack[stack.length-1]===f?'on':''}">${f}</span>`).join(' / ')+
+    '<br><span style="color:var(--dim)">active: </span>'+stack.map(f=>`<span class="on">${f}</span>`).join(' <span style="color:var(--dim)">▸</span> ');
+}
+
+let ip;
+function paint(i){
+  const s=STEPS[i];
+  renderTree(s.stack);
+  renderMain(buildMainCells(s.stack));
+  renderShadow(buildShadowCells(s.stack));
+  $('#info').innerHTML='<h3>Step '+(i+1)+' / '+STEPS.length+'</h3>'+s.d;
+  $('#back').disabled=i<=0; $('#step').disabled=i>=STEPS.length-1; $('#run').disabled=i>=STEPS.length-1;
+}
+function reset(){ ip=0; paint(0); }
+function step(){ if(ip<STEPS.length-1){ ip++; paint(ip); } }
+function back(){ if(ip>0){ ip--; paint(ip); } }
+function run(){ const t=setInterval(()=>{ if(ip>=STEPS.length-1){clearInterval(t);return;} step(); },700); }
+$('#step').onclick=step; $('#back').onclick=back; $('#reset').onclick=reset; $('#run').onclick=run;
+reset();
+</script>
+</body>
+</html>
