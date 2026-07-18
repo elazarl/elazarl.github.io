@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pulumi — how infrastructure-as-code turns a program into cloud resources</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pur:#bc8cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}
+  header{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 4px;font-size:22px}
+  header p{margin:0 0 6px;color:var(--dim);max-width:92ch}
+  header code{font-family:var(--mono);color:var(--pur);font-size:13px}
+  section{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 6px}
+  section>p{color:var(--dim);max-width:92ch}
+  section>p .hl,.info .hl{color:var(--ink)}
+  code{font-family:var(--mono);color:var(--pur);font-size:12.5px}
+  b,strong{color:var(--ink)}
+  /* ── mermaid diagram frame ── */
+  .diagram{background:#010409;border:1px solid var(--line);border-radius:10px;padding:16px;
+           margin:16px 0;overflow-x:auto}
+  .diagram .mermaid{text-align:center;min-height:20px}
+  .cap-note{color:var(--dim);font-size:12.5px;margin:6px 2px 0}
+  /* ── two-column layouts ── */
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+  /* ── concept cards ── */
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:8px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px 15px;
+        border-left:3px solid var(--acc)}
+  .card h3{margin:0 0 5px;font-size:14.5px;color:var(--ink)}
+  .card p{margin:0;color:var(--dim);font-size:13px}
+  .card.c-res{border-left-color:var(--ok)} .card.c-prov{border-left-color:var(--pur)}
+  .card.c-stack{border-left-color:var(--warn)} .card.c-state{border-left-color:var(--bad)}
+  .card.c-io{border-left-color:var(--acc)}
+  /* ── info panel (clickable code) ── */
+  .info{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc);
+        border-radius:8px;padding:14px 16px;font-size:13.5px;color:var(--dim)}
+  .info h3{margin:0 0 6px;color:var(--ink);font-size:15px}
+  .info .cap{margin-top:10px;font-size:11.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+  /* ── clickable code ── */
+  .code{background:#010409;border:1px solid var(--line);border-radius:10px;padding:10px 4px;
+        font-family:var(--mono);font-size:12.5px;line-height:1.7;overflow-x:auto}
+  .ln{display:block;padding:1px 12px;border-left:2px solid transparent;cursor:pointer;
+      white-space:pre;transition:.1s}
+  .ln:hover{background:rgba(88,166,255,.08);border-left-color:var(--line)}
+  .ln.active{background:rgba(88,166,255,.14);border-left-color:var(--acc)}
+  .ln.empty{cursor:default;min-height:9px}
+  .ln.empty:hover{background:none;border-left-color:transparent}
+  .k-kw{color:#ff7b72} .k-fn{color:#d2a8ff} .k-str{color:#a5d6ff} .k-com{color:var(--dim)}
+  .k-num{color:#79c0ff} .k-typ{color:#7ee787} .k-pun{color:var(--dim)}
+  #tsinfo{position:sticky;top:14px}
+  /* ── pills / step chips ── */
+  .pill{display:inline-block;font-family:var(--mono);font-size:12px;padding:2px 8px;border-radius:6px;
+        margin:2px 4px 2px 0;border:1px solid var(--line)}
+  .pill b{color:var(--ink)}
+  .p-up{color:var(--ok)} .p-prev{color:var(--acc)} .p-refr{color:var(--warn)} .p-dest{color:var(--bad)}
+  /* ── details ── */
+  details{margin-top:14px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+  details>summary{cursor:pointer;padding:12px 14px;font-weight:600;font-size:14px;list-style:none}
+  details>summary::-webkit-details-marker{display:none}
+  details>summary::before{content:"▸ ";color:var(--acc)}
+  details[open]>summary::before{content:"▾ "}
+  details .body{padding:0 14px 14px;color:var(--dim);font-size:13.5px}
+  footer{padding:14px 28px;color:var(--dim);font-size:12.5px}
+  a{color:var(--acc)}
+  /* ── hover/tap-for-Hebrew glossary words ── */
+  .he{border-bottom:1px dotted var(--warn);cursor:help}
+  .he:hover,.he.he-on{color:var(--warn);background:rgba(210,153,34,.15)}
+  .hepop{position:fixed;z-index:60;display:none;direction:rtl;background:var(--warn);color:#1a1400;
+    font:600 13px/1.45 system-ui,sans-serif;padding:7px 11px;border-radius:8px;max-width:300px;
+    pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.45)}
+  .hepop::after{content:"";position:absolute;left:50%;transform:translateX(-50%);border:6px solid transparent}
+  .hepop:not(.below)::after{top:100%;border-top-color:var(--warn)}
+  .hepop.below::after{bottom:100%;border-bottom-color:var(--warn)}
+  .hepop.on{display:block}
+  .hetip{margin:6px 0 0;direction:rtl;text-align:right;color:var(--warn);font-size:13px}
+  .hetip .he{color:var(--warn)}
+  /* ── phones ── */
+  @media (max-width:760px){
+    body{font-size:14px}
+    header,section{padding:16px}
+    h1{font-size:18px}
+    .cols{grid-template-columns:1fr}
+    #tsinfo{position:static}
+    .code{font-size:11.5px}
+    footer{padding:12px 16px}
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pulumi — how a program becomes cloud infrastructure</h1>
+  <p>Instead of clicking around a cloud console, you describe the servers, databases and networks you want in a <span class="he" title="שפת תכנות רגילה כמו TypeScript, Python או Go — להבדיל מקובץ תצורה סטטי כמו YAML">real programming language</span>. Pulumi runs that program, works out the difference between <b>what you asked for</b> and <b>what already exists</b> in the cloud, and makes exactly the API calls needed to close the gap. This page explains the machinery, then walks a concrete example: deploying a <span class="he" title="שרת אחורי — הקוד שרץ בענן ומטפל בבקשות, להבדיל מהצד שרץ בדפדפן">Node.js backend</span> to Google Cloud Run.</p>
+  <p class="hetip">💡 טיפ: העבירו את העכבר (או הקישו באצבע) מעל <span class="he" title="hover — ריחוף עם העכבר / מגע באצבע במובייל">מילים מקצועיות</span> המסומנות בקו מקווקו צהוב, כדי לראות הסבר מלא בעברית.</p>
+</header>
+
+<!-- ─────────────── 1. THE BIG PICTURE ─────────────── -->
+<section>
+  <h2>The big picture · what happens when you run Pulumi</h2>
+  <p>Pulumi is <span class="he" title="תשתית כקוד — ניהול שרתים ומשאבי ענן על ידי קוד גרסאי, במקום הגדרה ידנית בממשק">infrastructure as code</span>. Your program doesn't <em>do</em> the work itself — it <span class="he" title="הצהרתי — הקוד מתאר את התוצאה הרצויה, לא את הצעדים להשגתה">declares</span> the resources you want. The Pulumi engine reads those declarations, talks to a <span class="he" title="ספק — תוסף שיודע לדבר עם ה-API של ענן מסוים (Google Cloud, AWS...) ולתרגם משאב להוראות אמיתיות">provider</span> plugin for your cloud, and turns them into real API calls.</p>
+  <div class="diagram">
+    <pre class="mermaid">
+flowchart LR
+  A["Your program<br/>(TypeScript / Python / Go)"] --> B["Language host<br/>runs your code"]
+  B -- "registers resources" --> C["Deployment engine<br/>builds a desired-state graph"]
+  C -- "compares with" --> D[("State<br/>last-known reality")]
+  C -- "create / update / delete" --> E["Provider plugin<br/>e.g. google-native"]
+  E -- "HTTPS API calls" --> F["☁️ Google Cloud<br/>real resources"]
+  F -- "actual results" --> D
+</pre>
+  </div>
+  <p class="cap-note">Your code only names <span class="hl">what</span> should exist. The engine figures out the <span class="hl">how</span> — the order, the dependencies, and the minimal set of changes.</p>
+</section>
+
+<!-- ─────────────── 2. THE MENTAL MODEL ─────────────── -->
+<section>
+  <h2>The one idea that matters · desired state vs. actual state</h2>
+  <p>Every time you run Pulumi it does the same three things: read your program to get the <b>desired state</b>, read the <span class="he" title="מצב — קובץ שבו Pulumi רושם מה יצר בפועל, כדי לדעת בפעם הבאה מה כבר קיים">state file</span> to get the <b>last-known actual state</b>, and compute a <span class="he" title="הפרש — רשימת השינויים בין המצב הרצוי למצב הקיים">diff</span>. Only the diff is executed — this is what makes re-running safe and <span class="he" title="אידמפוטנטי — הרצה חוזרת מגיעה לאותה תוצאה; אם הכול כבר תואם, לא נעשה דבר">idempotent</span>.</p>
+  <div class="cols">
+    <div>
+      <div class="diagram">
+        <pre class="mermaid">
+flowchart TB
+  P["Desired state<br/>(from your code)"] --> DIFF{"Compare"}
+  S[("Actual state<br/>(from state file)")] --> DIFF
+  DIFF -- "in code, not in cloud" --> CR["➕ Create"]
+  DIFF -- "changed" --> UP["✏️ Update"]
+  DIFF -- "in cloud, not in code" --> DEL["🗑️ Delete"]
+  DIFF -- "identical" --> NO["✓ No change"]
+</pre>
+      </div>
+    </div>
+    <div>
+      <div class="info">
+        <h3>The verbs you actually type</h3>
+        <p style="margin:0 0 10px">
+          <span class="pill p-prev"><b>pulumi preview</b></span> shows the diff, changes nothing.<br>
+          <span class="pill p-up"><b>pulumi up</b></span> shows the diff, then applies it after you confirm.<br>
+          <span class="pill p-refr"><b>pulumi refresh</b></span> re-reads the cloud to catch <span class="he" title="סחיפה — כשמישהו שינה משאב ידנית בענן והמצב בפועל כבר לא תואם את הקוד">drift</span>.<br>
+          <span class="pill p-dest"><b>pulumi destroy</b></span> deletes everything the stack created.
+        </p>
+        <p style="margin:0">Because the engine always <span class="he" title="להתכנס — להגיע בהדרגה מהמצב הקיים אל המצב הרצוי">converges</span> toward your code, your program is the single source of truth. Delete a resource from the code and the next <code>up</code> deletes it from the cloud.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────── 3. CORE CONCEPTS ─────────────── -->
+<section>
+  <h2>The vocabulary · six words that cover almost everything</h2>
+  <div class="cards">
+    <div class="card c-res">
+      <h3>Resource</h3>
+      <p>One thing in the cloud — a Cloud Run service, a bucket, a database. You create it by constructing an object: <code>new gcp.storage.Bucket(...)</code>.</p>
+    </div>
+    <div class="card c-prov">
+      <h3>Provider</h3>
+      <p>The plugin that knows a cloud's API. <code>@pulumi/gcp</code> maps your resource objects to Google Cloud calls; there are providers for AWS, Azure, Kubernetes and ~150 more.</p>
+    </div>
+    <div class="card c-stack">
+      <h3>Stack</h3>
+      <p>One independent <span class="he" title="מופע — עותק נפרד של אותה תשתית, למשל סביבת בדיקות מול סביבת ייצור">instance</span> of your program — <code>dev</code>, <code>staging</code>, <code>prod</code>. Same code, different config and its own state.</p>
+    </div>
+    <div class="card c-state">
+      <h3>State &amp; backend</h3>
+      <p>The record of what Pulumi created, stored in a <span class="he" title="צד-שרת / מאחסן — היכן קובץ המצב נשמר, למשל Pulumi Cloud או דלי אחסון">backend</span> (Pulumi Cloud, an S3/GCS bucket, or a local file).</p>
+    </div>
+    <div class="card c-io">
+      <h3>Inputs &amp; Outputs</h3>
+      <p>An <span class="he" title="פלט — ערך שנודע רק אחרי שהמשאב נוצר, כמו הכתובת של השירות">Output</span> is a value known only <em>after</em> a resource exists (like a URL). Feed one resource's output into another's input and Pulumi learns the dependency automatically.</p>
+    </div>
+    <div class="card">
+      <h3>Program</h3>
+      <p>Your whole entry file. It runs top-to-bottom once per <code>up</code>, registering every resource. Loops, conditionals and functions are all fair game — it's real code.</p>
+    </div>
+  </div>
+  <details>
+    <summary>Why a real language instead of YAML?</summary>
+    <div class="body">
+      <p>Static config files (YAML, JSON) can't express "make 3 of these", "only in production", or "derive this name from that ID" without bolting on a templating layer. A real language gives you <span class="hl">loops, variables, functions, types and your editor's autocomplete</span> for free. Pulumi still supports YAML for simple cases — but the point is you're not forced into it. The trade-off: with real code you can also write real bugs, so most teams keep infrastructure programs small and boring.</p>
+    </div>
+  </details>
+</section>
+
+<!-- ─────────────── 4. THE EXAMPLE — WHAT UP DOES ─────────────── -->
+<section>
+  <h2>Example · deploying a Node.js backend to Cloud Run</h2>
+  <p><span class="he" title="Cloud Run — שירות של גוגל שמריץ מכולות (containers) ומרחיב אותן אוטומטית לפי העומס, כולל כיווץ לאפס כשאין תעבורה">Cloud Run</span> runs a <span class="he" title="מכולה — חבילה שאורזת את הקוד עם כל התלויות שלו כדי שירוץ זהה בכל מקום">container</span> and scales it up and down for you — including <span class="he" title="כיווץ לאפס — כשאין תעבורה, לא רץ אף מופע ולא משלמים">scaling to zero</span> when idle. To deploy a Node.js API we need four resources, and they have a natural order. Here is what a single <code>pulumi up</code> actually does:</p>
+  <div class="diagram">
+    <pre class="mermaid">
+sequenceDiagram
+  participant You as pulumi up
+  participant Eng as Engine
+  participant AR as Artifact Registry
+  participant Run as Cloud Run
+  participant IAM as IAM
+  You->>Eng: read program, build graph
+  Eng->>AR: create Docker repository
+  Eng->>AR: build ./app image &amp; push it
+  AR-->>Eng: image digest
+  Eng->>Run: create service from that image
+  Run-->>Eng: service URL
+  Eng->>IAM: allow allUsers to invoke
+  Eng-->>You: export url = https://api-xxxx.run.app
+</pre>
+  </div>
+  <p class="cap-note">Notice the arrows carry data: the image's <span class="he" title="טביעת אצבע — מזהה ייחודי ובלתי-משתנה של גרסת התמונה, מבוסס על תוכנה">digest</span> flows into the service, and the service's URL flows back to you as an output. Pulumi derives the order from that data flow — you never write it explicitly.</p>
+</section>
+
+<!-- ─────────────── 5. THE EXAMPLE — THE CODE ─────────────── -->
+<section>
+  <h2>The code · click any line to see what it does</h2>
+  <div class="cols">
+    <div class="code" id="tscode"><span class="ln" data-k="imp1"><span class="k-kw">import</span> * <span class="k-kw">as</span> gcp <span class="k-kw">from</span> <span class="k-str">"@pulumi/gcp"</span>;</span><span class="ln" data-k="imp2"><span class="k-kw">import</span> * <span class="k-kw">as</span> docker <span class="k-kw">from</span> <span class="k-str">"@pulumi/docker"</span>;</span><span class="ln" data-k="imp3"><span class="k-kw">import</span> * <span class="k-kw">as</span> pulumi <span class="k-kw">from</span> <span class="k-str">"@pulumi/pulumi"</span>;</span><span class="ln empty"> </span><span class="ln" data-k="loc"><span class="k-kw">const</span> location = <span class="k-str">"us-central1"</span>;</span><span class="ln empty"> </span><span class="ln" data-k="repocom"><span class="k-com">// 1. somewhere to keep the container image</span></span><span class="ln" data-k="repo"><span class="k-kw">const</span> repo = <span class="k-kw">new</span> gcp.artifactregistry.<span class="k-typ">Repository</span>(<span class="k-str">"backend"</span>, {</span><span class="ln" data-k="repoid">  repositoryId: <span class="k-str">"backend"</span>,</span><span class="ln" data-k="repofmt">  format: <span class="k-str">"DOCKER"</span>, location,</span><span class="ln" data-k="repoend">});</span><span class="ln empty"> </span><span class="ln" data-k="imgcom"><span class="k-com">// 2. build ./app into an image and push it</span></span><span class="ln" data-k="reg"><span class="k-kw">const</span> registry = pulumi.<span class="k-fn">interpolate</span>`${location}-docker.pkg.dev`;</span><span class="ln" data-k="img"><span class="k-kw">const</span> image = <span class="k-kw">new</span> docker.<span class="k-typ">Image</span>(<span class="k-str">"api-img"</span>, {</span><span class="ln" data-k="imgname">  imageName: pulumi.<span class="k-fn">interpolate</span>`${registry}/${gcp.config.project}/backend/api`,</span><span class="ln" data-k="imgbuild">  build: { context: <span class="k-str">"./app"</span>, platform: <span class="k-str">"linux/amd64"</span> },</span><span class="ln" data-k="imgend">});</span><span class="ln empty"> </span><span class="ln" data-k="svccom"><span class="k-com">// 3. the Cloud Run service that runs the container</span></span><span class="ln" data-k="svc"><span class="k-kw">const</span> service = <span class="k-kw">new</span> gcp.cloudrunv2.<span class="k-typ">Service</span>(<span class="k-str">"api"</span>, {</span><span class="ln" data-k="svcloc">  location,</span><span class="ln" data-k="svctmpl">  template: {</span><span class="ln" data-k="svccont">    containers: [{</span><span class="ln" data-k="svcimg">      image: image.imageName,</span><span class="ln" data-k="svcport">      ports: [{ containerPort: <span class="k-num">8080</span> }],</span><span class="ln" data-k="svcres">      resources: { limits: { cpu: <span class="k-str">"1"</span>, memory: <span class="k-str">"512Mi"</span> } },</span><span class="ln" data-k="svccontend">    }],</span><span class="ln" data-k="svcscale">    scaling: { minInstanceCount: <span class="k-num">0</span>, maxInstanceCount: <span class="k-num">10</span> },</span><span class="ln" data-k="svctmplend">  },</span><span class="ln" data-k="svcend">});</span><span class="ln empty"> </span><span class="ln" data-k="iamcom"><span class="k-com">// 4. let anyone on the internet call it</span></span><span class="ln" data-k="iam"><span class="k-kw">new</span> gcp.cloudrunv2.<span class="k-typ">ServiceIamMember</span>(<span class="k-str">"public"</span>, {</span><span class="ln" data-k="iamname">  name: service.name, location,</span><span class="ln" data-k="iamrole">  role: <span class="k-str">"roles/run.invoker"</span>,</span><span class="ln" data-k="iammember">  member: <span class="k-str">"allUsers"</span>,</span><span class="ln" data-k="iamend">});</span><span class="ln empty"> </span><span class="ln" data-k="expcom"><span class="k-com">// 5. print the public URL when done</span></span><span class="ln" data-k="exp"><span class="k-kw">export</span> <span class="k-kw">const</span> url = service.uri;</span></div>
+    <div class="info" id="tsinfo">
+      <h3>Click any line of code</h3>
+      Four resources — a <span class="hl">repository</span>, an <span class="hl">image</span>, a <span class="hl">service</span> and an <span class="hl">IAM grant</span> — plus one exported output. Click a line to see what it declares and how Pulumi uses it. Notice you never write "wait for the image before the service": passing <code>image.imageName</code> into the service is enough for Pulumi to order them.
+    </div>
+  </div>
+  <details>
+    <summary>What's in ./app — the Node.js server itself</summary>
+    <div class="body">
+      <p>The container just needs to listen on the port Cloud Run injects via <code>$PORT</code> (it's 8080 here). A minimal Express server:</p>
+      <div class="code" style="margin-top:8px"><span class="ln empty" style="cursor:default"><span class="k-kw">const</span> express = <span class="k-fn">require</span>(<span class="k-str">"express"</span>);</span><span class="ln empty" style="cursor:default"><span class="k-kw">const</span> app = <span class="k-fn">express</span>();</span><span class="ln empty" style="cursor:default">app.<span class="k-fn">get</span>(<span class="k-str">"/"</span>, (req, res) => res.<span class="k-fn">send</span>(<span class="k-str">"hi from Cloud Run"</span>));</span><span class="ln empty" style="cursor:default">app.<span class="k-fn">listen</span>(process.env.<span class="k-typ">PORT</span> || <span class="k-num">8080</span>);</span></div>
+      <p style="margin-top:10px">Plus a two-line <code>Dockerfile</code> (<code>FROM node:20-slim</code>, copy, <code>npm install</code>, <code>CMD ["node","server.js"]</code>). Pulumi's docker provider builds this for you during <code>up</code> — no separate build step.</p>
+    </div>
+  </details>
+</section>
+
+<!-- ─────────────── 6. DEPENDENCY GRAPH ─────────────── -->
+<section>
+  <h2>Why the order is automatic · the dependency graph</h2>
+  <p>Pulumi builds a <span class="he" title="גרף מכוון ללא מעגלים — כל צומת תלוי רק בקודמיו, אין לולאה של תלויות">directed graph</span> from the way outputs feed into inputs, then walks it — creating independent resources <span class="he" title="במקביל — בו-זמנית, לא בזה אחר זה, כדי לחסוך זמן">in parallel</span> and dependent ones in order. For our example the graph is:</p>
+  <div class="diagram">
+    <pre class="mermaid">
+flowchart LR
+  R["Repository<br/><small>backend</small>"] --> I["Image<br/><small>api-img</small>"]
+  I -- "image.imageName" --> S["Service<br/><small>api</small>"]
+  S -- "service.name" --> M["IamMember<br/><small>public</small>"]
+  S -- "service.uri" --> O(["export url"])
+  style O fill:#1f6feb22,stroke:#58a6ff
+</pre>
+  </div>
+  <p class="cap-note">Change only the Node code, and re-running <code>up</code> rebuilds the <span class="hl">image</span>, sees its new digest differs, updates the <span class="hl">service</span>, and leaves the repository and IAM grant untouched — the minimal diff, again.</p>
+</section>
+
+<footer>
+  Pulumi state is the source of truth about <span class="he" title="מה שנוצר בפועל — הרשומה של המשאבים הקיימים, כפי ש-Pulumi מכיר אותם">what exists</span>; your program is the source of truth about <span class="he" title="מה שצריך להתקיים — התיאור הרצוי של התשתית">what should exist</span>. Every run reconciles the two. Code, diagrams and resource names here are illustrative but valid Pulumi.
+</footer>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({
+    startOnLoad:true, securityLevel:"loose", theme:"base",
+    themeVariables:{
+      background:"#010409", primaryColor:"#161b22", primaryTextColor:"#e6edf3",
+      primaryBorderColor:"#30363d", lineColor:"#58a6ff", secondaryColor:"#21262d",
+      tertiaryColor:"#161b22", fontFamily:"system-ui, sans-serif", fontSize:"14px",
+      clusterBkg:"#0d1117", clusterBorder:"#30363d",
+      actorBkg:"#161b22", actorBorder:"#58a6ff", actorTextColor:"#e6edf3",
+      signalColor:"#8b949e", signalTextColor:"#e6edf3", labelBoxBkgColor:"#161b22",
+      noteBkgColor:"#1f2937", noteTextColor:"#e6edf3"
+    }
+  });
+</script>
+
+<script>
+// ── clickable code, line by line ─────────────────────────────────────
+const TS={
+  imp1:{h:"import the GCP provider",b:"<code>@pulumi/gcp</code> is the <span class='hl'>provider</span> — it exposes every Google Cloud resource as a class. This one import is what lets <code>new gcp.cloudrunv2.Service(...)</code> turn into real API calls.",cap:"the Google Cloud provider"},
+  imp2:{h:"import the Docker provider",b:"Handles building a container image from a local folder and pushing it to a registry — all during <code>pulumi up</code>, so you don't run <code>docker build</code> by hand.",cap:"build & push images"},
+  imp3:{h:"import the Pulumi core",b:"Gives us helpers like <code>pulumi.interpolate</code> for stitching <span class='hl'>outputs</span> (values not known until deploy time) into strings safely.",cap:"the engine's own SDK"},
+  loc:{h:"one region for everything",b:"A plain variable, reused below. This is the payoff of a real language: define once, reference everywhere — no copy-paste across a YAML file.",cap:"an ordinary variable"},
+  repocom:{h:"resource 1 of 4",b:"A comment. The next few lines declare the <span class='hl'>Artifact Registry</span> repository that will hold our image.",cap:"a place for the image"},
+  repo:{h:"new Repository(...)",b:"Constructing an object <span class='hl'>declares a resource</span>. The first argument <code>\"backend\"</code> is its logical name inside the stack — how Pulumi tracks it in state across runs. Nothing runs yet; it's registered with the engine.",cap:"resource: Artifact Registry repo"},
+  repoid:{h:"repositoryId",b:"The actual ID the repo will have in Google Cloud. The logical name (for Pulumi) and the physical ID (for GCP) are separate on purpose.",cap:"the physical id in GCP"},
+  repofmt:{h:"format: DOCKER",b:"This registry stores Docker images (Artifact Registry can also hold npm, Maven, etc.). <code>location</code> uses our variable via JavaScript's shorthand — same as <code>location: location</code>.",cap:"a Docker registry"},
+  repoend:{h:"close the resource",b:"The object literal of settings ends. <code>repo</code> now holds a handle whose <span class='hl'>outputs</span> we could feed into other resources.",cap:"resource registered"},
+  imgcom:{h:"resource 2 of 4",b:"Now the container image built from your <code>./app</code> folder.",cap:"build the image"},
+  reg:{h:"the registry hostname",b:"<code>pulumi.interpolate</code> builds a string from values that may only be known at deploy time. For a fixed region it's just <code>us-central1-docker.pkg.dev</code>, but interpolate is the safe way to mix in outputs.",cap:"where the image will live"},
+  img:{h:"new docker.Image(...)",b:"Declares an image resource. During <code>up</code>, the docker provider runs a real <span class='hl'>build</span> and <span class='hl'>push</span> — the image is a resource just like anything else, with its own state.",cap:"resource: the container image"},
+  imgname:{h:"imageName",b:"The full path the image is pushed to: <code>host/project/repo/name</code>. <code>gcp.config.project</code> is itself an output, so we interpolate it in rather than hard-coding the project id.",cap:"the push destination"},
+  imgbuild:{h:"build: { context, platform }",b:"<code>context: \"./app\"</code> is the folder with your Dockerfile and Node code. <code>platform: linux/amd64</code> forces the architecture Cloud Run expects — important when building on an Apple-silicon laptop.",cap:"what & how to build"},
+  imgend:{h:"close the image",b:"<code>image.imageName</code> is now an <span class='hl'>output</span> carrying the pushed image's reference — the link we hand to the service next.",cap:"image ready to reference"},
+  svccom:{h:"resource 3 of 4",b:"The Cloud Run service — the thing that actually runs your code and answers requests.",cap:"the running service"},
+  svc:{h:"new cloudrunv2.Service(...)",b:"Declares the Cloud Run service. <code>cloudrunv2</code> is the current generation of the API. Everything about how the container runs lives in its <code>template</code>.",cap:"resource: Cloud Run service"},
+  svcloc:{h:"location",b:"Same region variable again — the service sits next to its image's registry, so pulls are fast and free.",cap:"region"},
+  svctmpl:{h:"template",b:"Describes each <span class='hl'>revision</span> — one deployed version of the service. Change anything in here and Cloud Run rolls out a new revision you can roll back to.",cap:"the revision spec"},
+  svccont:{h:"containers: [ ... ]",b:"A service can run more than one container (e.g. a sidecar), but here it's just our one API container.",cap:"the container list"},
+  svcimg:{h:"image: image.imageName",b:"<b>This one line creates the dependency.</b> By reading the image resource's output, Pulumi learns the service must be built <span class='hl'>after</span> the image. You never state the order — the data flow implies it.",cap:"← the crucial link"},
+  svcport:{h:"containerPort: 8080",b:"The port your Node server listens on. Cloud Run sends traffic here and also passes it to your app as the <code>$PORT</code> environment variable.",cap:"where traffic arrives"},
+  svcres:{h:"resources.limits",b:"CPU and memory caps per instance. Cloud Run bills only while a request is being handled, so small limits keep idle cost at zero.",cap:"per-instance size"},
+  svccontend:{h:"close the container",b:"End of the single container's definition.",cap:""},
+  svcscale:{h:"scaling: min 0, max 10",b:"<code>minInstanceCount: 0</code> is <span class='hl'>scale to zero</span> — no traffic, no running instances, no bill. <code>max 10</code> caps how far it grows under load.",cap:"autoscaling bounds"},
+  svctmplend:{h:"close the template",b:"End of the revision template.",cap:""},
+  svcend:{h:"close the service",b:"The service is registered. It exposes outputs like <code>service.uri</code> (its public URL) and <code>service.name</code> — both used below.",cap:"service registered"},
+  iamcom:{h:"resource 4 of 4",b:"By default a Cloud Run service is private. This last resource opens it to the public.",cap:"the access grant"},
+  iam:{h:"new ServiceIamMember(...)",b:"An <span class='hl'>IAM binding</span> is itself a resource. We don't even store it in a variable — we only need it to exist, so declaring it is enough.",cap:"resource: IAM binding"},
+  iamname:{h:"name: service.name",b:"Another output-into-input link: this binding attaches to the service above, so Pulumi creates it <span class='hl'>after</span> the service exists.",cap:"← depends on the service"},
+  iamrole:{h:"role: run.invoker",b:"The permission to <em>call</em> the service. Not admin, not editor — just the right to send it requests.",cap:"the permission granted"},
+  iammember:{h:"member: allUsers",b:"<code>allUsers</code> is Google's magic identity for <span class='hl'>anyone, unauthenticated</span>. This is what makes the URL publicly reachable. Drop this resource and the API requires a login token.",cap:"who gets it — everyone"},
+  iamend:{h:"close the binding",b:"The grant is registered. Four resources declared in total.",cap:"binding registered"},
+  expcom:{h:"the stack output",b:"A comment. The final line exports a value out of the program.",cap:"expose a result"},
+  exp:{h:"export const url",b:"An <code>export</code> becomes a <span class='hl'>stack output</span> — printed after <code>up</code> and readable with <code>pulumi stack output url</code>. <code>service.uri</code> is known only after deploy, so Pulumi fills it in once the service is live.",cap:"the URL you'll actually visit"}
+};
+const tsinfo=document.getElementById('tsinfo');
+const tslines=[...document.querySelectorAll('#tscode .ln[data-k]')];
+function renderTs(d){
+  tsinfo.innerHTML='<h3>'+d.h+'</h3>'+d.b+(d.cap?'<div class="cap">'+d.cap+'</div>':'');
+  annotate(tsinfo);
+}
+tslines.forEach(n=>n.addEventListener('click',()=>{
+  tslines.forEach(x=>x.classList.remove('active'));n.classList.add('active');
+  renderTs(TS[n.dataset.k]);
+}));
+
+// ── hover/tap-for-Hebrew glossary ────────────────────────────────────
+const GLOSS={
+  declarative:"הצהרתי — הקוד מתאר את התוצאה הרצויה, לא את שלבי הביצוע",
+  imperative:"פקודתי — קוד שמפרט צעד-אחר-צעד מה לעשות (ההפך מהצהרתי)",
+  provider:"ספק — תוסף שמתרגם משאב מופשט להוראות אמיתיות מול ה-API של ענן מסוים",
+  resource:"משאב — יחידת תשתית אחת: שירות, דלי אחסון, בסיס נתונים וכו׳",
+  provision:"להקצות — ליצור ולהקים משאבי ענן בפועל",
+  reconcile:"ליישב — להשוות בין המצב הרצוי למצב הקיים ולסגור את הפער",
+  reconciles:"מיישב — משווה בין המצב הרצוי למצב הקיים וסוגר את הפער",
+  converge:"להתכנס — להגיע בהדרגה מהמצב הקיים אל המצב הרצוי",
+  converges:"מתכנס — מגיע בהדרגה מהמצב הקיים אל המצב הרצוי",
+  drift:"סחיפה — כשמישהו שינה משאב ידנית בענן והמצב בפועל כבר לא תואם את הקוד",
+  idempotent:"אידמפוטנטי — הרצה חוזרת מגיעה לאותה תוצאה; אם הכול תואם, לא נעשה דבר",
+  ephemeral:"בן-חלוף — קיים לזמן קצר בלבד ואז נעלם",
+  immutable:"בלתי-משתנה — לא ניתן לשינוי אחרי היווצרותו; מחליפים אותו בחדש",
+  artifact:"תוצר בנייה — פלט מוחשי של תהליך הבנייה, למשל תמונת מכולה",
+  registry:"מאגר — מקום מרוכז לאחסון תמונות מכולה או חבילות",
+  container:"מכולה — חבילה שאורזת קוד עם כל התלויות שלו כדי שירוץ זהה בכל מקום",
+  containers:"מכולות — חבילות שאורזות קוד עם כל התלויות שלו",
+  backend:"צד-שרת / מאחסן — היכן קובץ המצב של Pulumi נשמר",
+  deploy:"לפרוס — להעלות ולהפעיל קוד או תשתית בסביבת ריצה",
+  deploying:"פריסה — העלאה והפעלה של קוד או תשתית בסביבת ריצה",
+  infrastructure:"תשתית — השרתים, הרשתות והשירותים שעליהם רצה התוכנה",
+  dependency:"תלות — כשמשאב אחד חייב את קיומו של אחר לפני שייווצר",
+  dependencies:"תלויות — קשרים שבהם משאב זקוק לאחר לפני יצירתו",
+  endpoint:"נקודת קצה — כתובת שאליה שולחים בקשות כדי להגיע לשירות",
+  revision:"גרסה — עותק פרוס אחד של השירות; אפשר לחזור אליו לאחור",
+  digest:"טביעת אצבע — מזהה ייחודי ובלתי-משתנה של גרסת התמונה, מבוסס על תוכנה",
+  autoscaling:"הרחבה אוטומטית — הגדלה והקטנה של מספר המופעים לפי העומס",
+  parallel:"במקביל — בו-זמנית, לא בזה אחר זה, כדי לחסוך זמן",
+  stateless:"חסר-מצב — אינו זוכר בקשות קודמות בין הרצה להרצה",
+  console:"ממשק ניהול — האתר הגרפי של הענן שבו מנהלים משאבים בלחיצות",
+  unauthenticated:"ללא אימות — בלי צורך בהזדהות או טוקן",
+  binding:"קישור הרשאה — חיבור בין זהות למשאב שמעניק לה הרשאה מסוימת"
+};
+const _keys=Object.keys(GLOSS).sort((a,b)=>b.length-a.length).map(k=>k.replace(/[-]/g,'\\$&'));
+const GLOSS_RE=new RegExp('\\b('+_keys.join('|')+')\\b','gi');
+const _SKIP=new Set(['PRE','SCRIPT','STYLE','BUTTON','CODE']);
+function annotate(root){
+  if(!root) return;
+  const tw=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode(n){
+    if(!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+    for(let p=n.parentElement;p&&p!==root.parentElement;p=p.parentElement)
+      if(_SKIP.has(p.tagName)||(p.classList&&(p.classList.contains('he')||p.classList.contains('code')||p.classList.contains('mermaid')||p.classList.contains('diagram')))) return NodeFilter.FILTER_REJECT;
+    return new RegExp(GLOSS_RE.source,'i').test(n.nodeValue)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT;
+  }});
+  const todo=[]; for(let n;n=tw.nextNode();) todo.push(n);
+  todo.forEach(node=>{
+    const s=node.nodeValue, frag=document.createDocumentFragment(); let last=0,m; GLOSS_RE.lastIndex=0;
+    while(m=GLOSS_RE.exec(s)){
+      if(m.index>last) frag.appendChild(document.createTextNode(s.slice(last,m.index)));
+      const sp=document.createElement('span'); sp.className='he';
+      const he=GLOSS[m[0].toLowerCase()]; sp.title=he; sp.dataset.he=he; sp.textContent=m[0];
+      frag.appendChild(sp); last=m.index+m[0].length;
+    }
+    if(last<s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+    node.parentNode.replaceChild(frag,node);
+  });
+}
+// annotate prose only — never the code blocks or mermaid diagrams
+[...document.querySelectorAll('section > p, .card p, .cap-note, .info, details .body, footer')].forEach(annotate);
+
+// ── custom Hebrew tooltip — hover AND tap ────────────────────────────
+const hepop=document.createElement('div'); hepop.className='hepop'; document.body.appendChild(hepop);
+let heCur=null;
+function showHe(el){
+  if(heCur) heCur.classList.remove('he-on');
+  heCur=el; el.classList.add('he-on');
+  hepop.textContent=el.dataset.he||el.title;
+  hepop.classList.add('on');
+  const r=el.getBoundingClientRect(), ph=hepop.offsetHeight;
+  const cx=Math.max(155,Math.min(r.left+r.width/2,window.innerWidth-155));
+  hepop.style.left=cx+'px';
+  if(r.top>ph+14){
+    hepop.classList.remove('below');
+    hepop.style.top=(r.top-8)+'px'; hepop.style.transform='translate(-50%,-100%)';
+  }else{
+    hepop.classList.add('below');
+    hepop.style.top=(r.bottom+8)+'px'; hepop.style.transform='translate(-50%,0)';
+  }
+}
+function hideHe(){ hepop.classList.remove('on'); if(heCur){heCur.classList.remove('he-on');heCur=null;} }
+document.addEventListener('mouseover',e=>{const el=e.target.closest('.he'); if(el) showHe(el);});
+document.addEventListener('mouseout', e=>{if(e.target.closest('.he')) hideHe();});
+document.addEventListener('click',    e=>{const el=e.target.closest('.he'); if(el){e.stopPropagation(); showHe(el);} else hideHe();});
+window.addEventListener('scroll',hideHe,true);
+</script>
+</body>
+</html>
