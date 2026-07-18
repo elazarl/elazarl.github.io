@@ -250,6 +250,90 @@ flowchart LR
   <p class="cap-note">Change only the Node code, and re-running <code>up</code> rebuilds the <span class="hl">image</span>, sees its new digest differs, updates the <span class="hl">service</span>, and leaves the repository and IAM grant untouched — the minimal diff, again.</p>
 </section>
 
+<!-- ─────────────── 7. REAL PROJECT · STACK CONFIG ─────────────── -->
+<section>
+  <h2>In the freeat project · how <code>Pulumi.stg.yaml</code> is used</h2>
+  <p>Your <code>~/freeat/pulumi</code> folder holds one program (<code>index.ts</code>) and one <b>config file per stack</b>: <code>Pulumi.stg.yaml</code> for staging, <code>Pulumi.prod.yaml</code> for production. The program is identical for both — only the config file changes. <code>Pulumi.yaml</code> (no stack suffix) just names the project (<code>freeat</code>) and its runtime. This is where a Laravel <code>.env</code> becomes Pulumi config. Click any line:</p>
+  <div class="cols">
+    <div class="code" id="yamlcode"><span class="ln" data-k="cfg">config:</span><span class="ln" data-k="gcpproj">  <span class="k-fn">gcp:project</span>: <span class="k-str">freeat-staging</span></span><span class="ln" data-k="envobj">  <span class="k-fn">freeat:env</span>:</span><span class="ln" data-k="url">    <span class="k-fn">APP_URL</span>: <span class="k-str">https://freeat-stg-...run.app</span></span><span class="ln" data-k="log">    <span class="k-fn">LOG_CHANNEL</span>: <span class="k-str">stderr</span></span><span class="ln" data-k="appkey">    <span class="k-fn">APP_KEY</span>:</span><span class="ln" data-k="secure">      <span class="k-kw">secure</span>: <span class="k-com">AAABAMiLE7B38ykLHaiX…</span></span><span class="ln" data-k="dbpass">    <span class="k-fn">DB_PASSWORD</span>:</span><span class="ln" data-k="securedb">      <span class="k-kw">secure</span>: <span class="k-com">AAABAAe4vh/HJYyb…</span></span></div>
+    <div class="info" id="yamlinfo">
+      <h3>Click any line of config</h3>
+      This file is pure <span class="hl">input</span> — no logic. <code>index.ts</code> reads <code>gcp:project</code> to know where to deploy, and the whole <code>freeat:env</code> object to fill the container's environment. Secrets sit here <span class="hl">encrypted</span>, which is what makes it safe to commit to git.
+    </div>
+  </div>
+  <details>
+    <summary>How index.ts consumes it</summary>
+    <div class="body">
+      <p>One line reads the object; one loop turns every entry into a Cloud Run environment variable:</p>
+      <div class="code" style="margin-top:8px"><span class="ln empty" style="cursor:default"><span class="k-kw">const</span> config = <span class="k-kw">new</span> pulumi.<span class="k-typ">Config</span>();</span><span class="ln empty" style="cursor:default"><span class="k-kw">const</span> envConfig = config.<span class="k-fn">getObject</span>&lt;<span class="k-typ">Record</span>&lt;string,string&gt;&gt;(<span class="k-str">"env"</span>) || {};</span><span class="ln empty" style="cursor:default"><span class="k-com">// ...inside the Cloud Run container definition:</span></span><span class="ln empty" style="cursor:default">envs: [ ...<span class="k-typ">Object</span>.<span class="k-fn">entries</span>(envConfig).<span class="k-fn">map</span>(([name, value]) => ({ name, value })) ]</span></div>
+      <p style="margin-top:10px">So adding a variable to <code>Pulumi.stg.yaml</code> and running <code>pulumi up</code> is all it takes to give the staging backend a new env var — no code change. Note some values (<code>DB_HOST</code>, <code>DB_PASSWORD</code>, the bucket name) are set <em>dynamically</em> in <code>index.ts</code> from the live resources Pulumi creates, so they can never drift out of sync with the real database or bucket.</p>
+    </div>
+  </details>
+</section>
+
+<!-- ─────────────── 8. PULUMI LOGIN ─────────────── -->
+<section>
+  <h2>Where state &amp; secrets live · <code>pulumi login</code></h2>
+  <p>Two things must survive <em>between</em> runs: the <b>state</b> (what Pulumi has already created) and the <b>encryption key</b> for those <code>secure:</code> values. Both live in a <span class="he" title="צד-שרת / מאחסן — היכן קובץ המצב והמפתח להצפנת הסודות נשמרים">backend</span>. <code>pulumi login</code> picks and authenticates that backend; <code>pulumi whoami</code> just reports whether you're logged in — the exact check <code>deploy-cloudrun.sh</code> runs before it deploys.</p>
+  <div class="cards">
+    <div class="card c-prov">
+      <h3>Pulumi Cloud <small>(default)</small></h3>
+      <p><code>pulumi login</code> → app.pulumi.com. State and secret-encryption are managed for you; your account is what grants decryption.</p>
+    </div>
+    <div class="card c-state">
+      <h3>Self-managed bucket</h3>
+      <p><code>pulumi login gs://my-bucket</code> (or <code>s3://…</code>). The state JSON lives in your own cloud storage; secrets are protected by a passphrase.</p>
+    </div>
+    <div class="card c-stack">
+      <h3>Local files</h3>
+      <p><code>pulumi login --local</code> → state under <code>~/.pulumi</code>. Secrets use a <span class="he" title="משפט-סיסמה — סיסמה ארוכה ששומרת על מפתח ההצפנה של הסודות">passphrase</span> from <code>PULUMI_CONFIG_PASSPHRASE</code>.</p>
+    </div>
+  </div>
+  <div class="info" style="margin-top:14px">
+    <h3>Why the deploy script checks login first</h3>
+    <p style="margin:0 0 10px">Reading <code>pulumi stack output</code> and decrypting <code>Pulumi.stg.yaml</code>'s secrets both need the backend — so the script guards it before doing anything:</p>
+    <div class="code"><span class="ln empty" style="cursor:default"><span class="k-kw">if</span> ! pulumi <span class="k-fn">whoami</span> &gt;/dev/null 2&gt;&amp;1; <span class="k-kw">then</span></span><span class="ln empty" style="cursor:default">  <span class="k-com"># not logged in →</span> pulumi <span class="k-fn">login</span></span><span class="ln empty" style="cursor:default"><span class="k-kw">fi</span></span></div>
+    <p style="margin:10px 0 0">With a self-managed or local backend you'd also need the right passphrase in the environment, or the <code>secure:</code> values can't be decrypted and <code>pulumi up</code> fails.</p>
+  </div>
+</section>
+
+<!-- ─────────────── 9. THE REAL DEPLOY FLOW ─────────────── -->
+<section>
+  <h2>The real deploy · what <code>deploy-cloudrun.sh stg|prod</code> does</h2>
+  <p>Here's the important twist versus the toy example above: in freeat, <b>Pulumi provisions the infrastructure</b> — Artifact Registry, a storage bucket, Cloud SQL, a service account with IAM, and the Cloud Run service — but the <b>container image is built and pushed outside Pulumi</b> by this script, then <code>gcloud run deploy</code> rolls it out. Pulumi stays the single source of truth for names and config; the script asks for them with <code>stack output</code>.</p>
+  <div class="diagram">
+    <pre class="mermaid">
+sequenceDiagram
+  participant S as deploy script
+  participant P as Pulumi
+  participant G as gcloud
+  participant AR as Artifact Registry
+  participant Run as Cloud Run
+  S->>P: pulumi whoami (login if needed)
+  S->>G: gcloud auth check
+  S->>P: stack output --json (stg or prod)
+  P-->>S: dockerRepoUrl, service, project, region
+  S->>G: gcloud auth configure-docker
+  S->>AR: podman build &amp; push image:latest
+  S->>Run: gcloud run deploy service --image :latest
+  Run-->>S: new revision serving
+</pre>
+  </div>
+  <div class="cols">
+    <div class="code" id="shcode"><span class="ln" data-k="guard"><span class="k-kw">if</span> ! pulumi <span class="k-fn">whoami</span> &gt;/dev/null 2&gt;&amp;1; <span class="k-kw">then</span></span><span class="ln" data-k="login">  pulumi <span class="k-fn">login</span></span><span class="ln" data-k="fi"><span class="k-kw">fi</span></span><span class="ln empty"> </span><span class="ln" data-k="outputs">OUTPUTS=<span class="k-str">"$(pulumi -s $STACK stack output --json)"</span></span><span class="ln" data-k="repo">REPO_URL=<span class="k-str">"$(… jq -r '.dockerRepoUrl')"</span></span><span class="ln" data-k="service">SERVICE=<span class="k-str">"$(… jq -r '.cloudRunServiceName')"</span></span><span class="ln empty"> </span><span class="ln" data-k="build">podman build --platform linux/amd64 -t <span class="k-str">"$IMAGE"</span> <span class="k-str">"$BACKEND_DIR"</span></span><span class="ln" data-k="push">podman push <span class="k-str">"$IMAGE"</span></span><span class="ln" data-k="deploy">gcloud run deploy <span class="k-str">"$SERVICE"</span> --image <span class="k-str">"$IMAGE"</span> --region <span class="k-str">"$REGION"</span></span></div>
+    <div class="info" id="shinfo">
+      <h3>Click any line</h3>
+      The script never hard-codes a project, repo or service name — every one comes from a Pulumi <code>export</code> in <code>index.ts</code>. Change the infra in Pulumi, and this same script automatically deploys against the new values.
+    </div>
+  </div>
+  <details>
+    <summary>Why build the image outside Pulumi?</summary>
+    <div class="body">
+      <p>Pulumi <em>can</em> build images (the toy example used <code>docker.Image</code>), but building in a plain shell script with podman iterates faster and keeps <code>pulumi up</code> about infrastructure, not app builds. The Cloud Run resource in <code>index.ts</code> just points at <code>backend:latest</code>, so a <code>gcloud run deploy</code> of a fresh <code>:latest</code> and a later <code>pulumi up</code> agree — no drift.</p>
+    </div>
+  </details>
+</section>
+
 <footer>
   Pulumi state is the source of truth about <span class="he" title="מה שנוצר בפועל — הרשומה של המשאבים הקיימים, כפי ש-Pulumi מכיר אותם">what exists</span>; your program is the source of truth about <span class="he" title="מה שצריך להתקיים — התיאור הרצוי של התשתית">what should exist</span>. Every run reconciles the two. Code, diagrams and resource names here are illustrative but valid Pulumi.
 </footer>
@@ -309,16 +393,45 @@ const TS={
   expcom:{h:"the stack output",b:"A comment. The final line exports a value out of the program.",cap:"expose a result"},
   exp:{h:"export const url",b:"An <code>export</code> becomes a <span class='hl'>stack output</span> — printed after <code>up</code> and readable with <code>pulumi stack output url</code>. <code>service.uri</code> is known only after deploy, so Pulumi fills it in once the service is live.",cap:"the URL you'll actually visit"}
 };
-const tsinfo=document.getElementById('tsinfo');
-const tslines=[...document.querySelectorAll('#tscode .ln[data-k]')];
-function renderTs(d){
-  tsinfo.innerHTML='<h3>'+d.h+'</h3>'+d.b+(d.cap?'<div class="cap">'+d.cap+'</div>':'');
-  annotate(tsinfo);
+// ── how Pulumi.stg.yaml is used, line by line ────────────────────────
+const YAML={
+  cfg:{h:"config:",b:"The whole file is just this stack's <span class='hl'>configuration</span> — inputs to the program, never code. <code>Pulumi.stg.yaml</code> is the <code>stg</code> stack; <code>Pulumi.prod.yaml</code> is <code>prod</code>. The same <code>index.ts</code> reads whichever stack you selected.",cap:"per-stack inputs"},
+  gcpproj:{h:"gcp:project",b:"A <span class='hl'>namespaced</span> setting: namespace <code>gcp</code> (the provider), key <code>project</code>. It tells the GCP provider which Google Cloud project this stack targets — <code>freeat-staging</code> for stg, the prod project for prod. Set it with <code>pulumi config set gcp:project freeat-staging</code>.",cap:"which GCP project"},
+  envobj:{h:"freeat:env — a config object",b:"Namespaced to your <span class='hl'>project name</span> (<code>freeat</code>), this single key holds a whole object: the Laravel <code>.env</code>. <code>index.ts</code> reads it with <code>config.getObject(\"env\")</code> and injects every entry as a Cloud Run environment variable.",cap:"the app's .env, as config"},
+  url:{h:"APP_URL — a plaintext value",b:"Not every value is secret. <code>APP_URL</code> is stored <span class='hl'>in the clear</span> — anyone with the repo can read it. Plaintext is fine for non-sensitive config.",cap:"plaintext config"},
+  log:{h:"LOG_CHANNEL: stderr",b:"Another plaintext entry. On Cloud Run you log to <code>stderr</code> so Google Cloud Logging captures it automatically — there are no log files on a stateless container.",cap:"plaintext config"},
+  appkey:{h:"APP_KEY — a secret key",b:"Laravel's encryption key. The value isn't here in the open — the indented <code>secure:</code> line right below holds it encrypted.",cap:"a secret follows"},
+  secure:{h:"secure: — an encrypted secret",b:"<code>secure:</code> means Pulumi <span class='hl'>encrypted</span> this value with the stack's secret key. That's why the file is safe in git: the ciphertext is useless without the key, which lives in your <span class='hl'>backend</span> (see below). Set one with <code>pulumi config set --secret --path env.APP_KEY &lt;value&gt;</code>.",cap:"encrypted — safe to commit"},
+  dbpass:{h:"DB_PASSWORD",b:"Same pattern — a database password kept as a secret. But note: the DB <em>host</em>, socket and name are <em>not</em> in this file at all. <code>index.ts</code> fills those from the live Cloud SQL instance it creates, so they can't drift out of sync.",cap:"secret + partly derived"},
+  securedb:{h:"the encrypted blob",b:"The ciphertext for <code>DB_PASSWORD</code>. To read a secret back in plaintext: <code>pulumi config get --path env.DB_PASSWORD</code>, or for exported outputs <code>pulumi stack output rawDbPassword --show-secrets</code>.",cap:"decrypt only when logged in"}
+};
+
+// ── the real deploy script, line by line ─────────────────────────────
+const SH={
+  guard:{h:"the login guard",b:"Before anything else the script runs <code>pulumi whoami</code>. It <span class='hl'>fails if you're not logged in</span> to a Pulumi backend — and you must be, because the next steps read stack outputs and decrypt config.",cap:"deploy-cloudrun.sh · line 30"},
+  login:{h:"pulumi login",b:"If <code>whoami</code> failed, log in. This authenticates the <span class='hl'>backend</span> that stores state and holds the key to decrypt those <code>secure:</code> values — exactly the topic of the section above.",cap:"authenticate the backend"},
+  fi:{h:"end of the guard",b:"After this block you're guaranteed logged in (or the script already exited non-zero). A twin guard just below does the same for <code>gcloud</code>.",cap:"login assured"},
+  outputs:{h:"read Pulumi outputs",b:"The heart of it: ask the selected stack for <span class='hl'>every export</span> as JSON. These come from the <code>export</code> lines at the bottom of <code>index.ts</code> — Pulumi is the single source of truth, so the script hard-codes no names.",cap:"pulumi -s stg stack output --json"},
+  repo:{h:"dockerRepoUrl",b:"Pulled from <code>export const dockerRepoUrl</code> in <code>index.ts</code> — the Artifact Registry path Pulumi created. The image gets tagged and pushed here.",cap:"where to push the image"},
+  service:{h:"cloudRunServiceName",b:"From <code>export const cloudRunServiceName</code>. This is the exact Cloud Run service Pulumi provisioned, so <code>gcloud run deploy</code> updates the <span class='hl'>right</span> one and not some stale name.",cap:"which service to update"},
+  build:{h:"build the image (podman)",b:"The key difference from a pure-Pulumi flow: the container image is built <span class='hl'>outside</span> Pulumi, with podman, from the backend folder. Pulumi provisions the <em>infrastructure</em>; this script handles the <em>image</em>.",cap:"built outside Pulumi"},
+  push:{h:"push to Artifact Registry",b:"Push the freshly built image to the <code>dockerRepoUrl</code> Pulumi handed us. An earlier <code>gcloud auth configure-docker</code> is what lets podman authenticate to the registry.",cap:"image now in the registry"},
+  deploy:{h:"gcloud run deploy",b:"Roll the new image onto the existing service as a fresh <span class='hl'>revision</span>. Pulumi already defined that service (env vars, Cloud SQL mount, service account); this just swaps in the new image. A later <code>pulumi up</code> stays in sync because the service still points at <code>:latest</code>.",cap:"new revision, live"}
+};
+
+function wireCode(codeSel,infoSel,dict){
+  const info=document.querySelector(infoSel);
+  const lines=[...document.querySelectorAll(codeSel+' .ln[data-k]')];
+  lines.forEach(n=>n.addEventListener('click',()=>{
+    lines.forEach(x=>x.classList.remove('active'));n.classList.add('active');
+    const d=dict[n.dataset.k];
+    info.innerHTML='<h3>'+d.h+'</h3>'+d.b+(d.cap?'<div class="cap">'+d.cap+'</div>':'');
+    annotate(info);
+  }));
 }
-tslines.forEach(n=>n.addEventListener('click',()=>{
-  tslines.forEach(x=>x.classList.remove('active'));n.classList.add('active');
-  renderTs(TS[n.dataset.k]);
-}));
+wireCode('#tscode','#tsinfo',TS);
+wireCode('#yamlcode','#yamlinfo',YAML);
+wireCode('#shcode','#shinfo',SH);
 
 // ── hover/tap-for-Hebrew glossary ────────────────────────────────────
 const GLOSS={
@@ -353,7 +466,20 @@ const GLOSS={
   stateless:"חסר-מצב — אינו זוכר בקשות קודמות בין הרצה להרצה",
   console:"ממשק ניהול — האתר הגרפי של הענן שבו מנהלים משאבים בלחיצות",
   unauthenticated:"ללא אימות — בלי צורך בהזדהות או טוקן",
-  binding:"קישור הרשאה — חיבור בין זהות למשאב שמעניק לה הרשאה מסוימת"
+  binding:"קישור הרשאה — חיבור בין זהות למשאב שמעניק לה הרשאה מסוימת",
+  namespace:"מרחב-שמות — קידומת שמפרידה בין קבוצות הגדרות, למשל gcp: או freeat:",
+  namespaced:"ממורחב-שמות — נתון ששייך לקידומת מסוימת (gcp:, freeat:) שמבחינה בין קבוצות",
+  plaintext:"טקסט גלוי — ערך שנשמר כמו שהוא, בלי הצפנה, וכל אחד יכול לקרוא",
+  encrypt:"להצפין — להפוך ערך לבלתי-קריא בלי המפתח",
+  encrypted:"מוצפן — הומר לצורה בלתי-קריאה שרק בעל המפתח יכול לפענח",
+  decrypt:"לפענח — להחזיר ערך מוצפן לצורתו הקריאה בעזרת המפתח",
+  decrypted:"מפוענח — הוחזר מהצורה המוצפנת לצורה הקריאה",
+  secret:"סוד — ערך רגיש (סיסמה, מפתח API) שיש לשמור מוצפן",
+  secrets:"סודות — ערכים רגישים שנשמרים מוצפנים",
+  passphrase:"משפט-סיסמה — סיסמה ארוכה ששומרת על מפתח ההצפנה של הסודות",
+  credentials:"פרטי-הזדהות — מפתחות או טוקנים שמאמתים מי אתה מול שירות",
+  provisions:"מקצה — יוצר ומקים משאבי ענן בפועל",
+  ciphertext:"טקסט מוצפן — התוצאה הבלתי-קריאה של הצפנת ערך"
 };
 const _keys=Object.keys(GLOSS).sort((a,b)=>b.length-a.length).map(k=>k.replace(/[-]/g,'\\$&'));
 const GLOSS_RE=new RegExp('\\b('+_keys.join('|')+')\\b','gi');
