@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The Google Cloud resources behind freeat — a visual tour</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pur:#bc8cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}
+  header{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 4px;font-size:22px}
+  header p{margin:0 0 6px;color:var(--dim);max-width:92ch}
+  header code,section code,footer code{font-family:var(--mono);color:var(--pur);font-size:12.5px}
+  section{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 10px}
+  section>p{color:var(--dim);max-width:92ch}
+  .hl{color:var(--ink)}
+  b,strong{color:var(--ink)}
+  /* service section head */
+  .svchead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:0 0 4px}
+  .svchead h2{margin:0;font-size:18px;text-transform:none;letter-spacing:0;color:var(--ink)}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block;flex:0 0 auto;align-self:center}
+  .tag{font-family:var(--mono);font-size:11.5px;color:var(--dim);border:1px solid var(--line);
+       border-radius:20px;padding:2px 9px}
+  .d-run{background:var(--acc)} .d-ar{background:var(--pur)} .d-gcs{background:var(--ok)}
+  .d-sql{background:var(--warn)} .d-sa{background:var(--bad)}
+  /* two-column: text + screenshot */
+  .svc{display:grid;grid-template-columns:1fr .92fr;gap:24px;align-items:start;margin-top:10px}
+  .svc p{color:var(--dim);margin:0 0 10px}
+  .shot{margin:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#010409}
+  .shot img{display:block;width:100%;height:auto}
+  .shot figcaption{padding:8px 12px;color:var(--dim);font-size:12px;border-top:1px solid var(--line);
+                   font-family:var(--mono)}
+  /* code snippet */
+  .code{background:#010409;border:1px solid var(--line);border-radius:9px;padding:10px 12px;
+        font-family:var(--mono);font-size:12px;line-height:1.65;overflow-x:auto;white-space:pre;margin:2px 0 0}
+  .k-kw{color:#ff7b72} .k-fn{color:#d2a8ff} .k-str{color:#a5d6ff} .k-com{color:var(--dim)}
+  .k-num{color:#79c0ff} .k-typ{color:#7ee787}
+  /* role pills */
+  .pill{display:inline-block;font-family:var(--mono);font-size:11.5px;padding:2px 8px;border-radius:6px;
+        margin:2px 4px 2px 0;border:1px solid var(--line);color:var(--ink)}
+  /* diagram */
+  .diagram{background:#010409;border:1px solid var(--line);border-radius:10px;padding:16px;
+           margin:14px 0 6px;overflow-x:auto}
+  .diagram .mermaid{text-align:center;min-height:20px}
+  .cap-note{color:var(--dim);font-size:12.5px;margin:6px 2px 0;max-width:92ch}
+  footer{padding:16px 28px;color:var(--dim);font-size:12.5px}
+  a{color:var(--acc)}
+  .hetip{margin:6px 0 0;direction:rtl;text-align:right;color:var(--warn);font-size:13px}
+  .hetip .he{color:var(--warn)}
+  /* hover/tap-for-Hebrew glossary */
+  .he{border-bottom:1px dotted var(--warn);cursor:help}
+  .he:hover,.he.he-on{color:var(--warn);background:rgba(210,153,34,.15)}
+  .hepop{position:fixed;z-index:60;display:none;direction:rtl;background:var(--warn);color:#1a1400;
+    font:600 13px/1.45 system-ui,sans-serif;padding:7px 11px;border-radius:8px;max-width:300px;
+    pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.45)}
+  .hepop::after{content:"";position:absolute;left:50%;transform:translateX(-50%);border:6px solid transparent}
+  .hepop:not(.below)::after{top:100%;border-top-color:var(--warn)}
+  .hepop.below::after{bottom:100%;border-bottom-color:var(--warn)}
+  .hepop.on{display:block}
+  @media (max-width:760px){
+    body{font-size:14px}
+    header,section{padding:16px}
+    h1{font-size:18px}
+    .svc{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>The Google Cloud resources behind <span style="color:var(--acc)">freeat</span></h1>
+  <p>The freeat backend runs entirely on <span class="he" title="שירותים מנוהלים — הענן מפעיל ומתחזק את התשתית במקומך, אתה רק מגדיר מה שצריך">managed Google Cloud services</span>, all defined as code in one Pulumi program (<code>~/freeat/pulumi/index.ts</code>). This page tours the <b>five</b> resources it uses — what each one is, how freeat uses it, and a real screenshot from the Google Cloud <span class="he" title="ממשק ניהול — האתר הגרפי שבו רואים ומנהלים משאבי ענן">console</span> of the <code>freeat-staging</code> project. For how they're <em>created</em>, see the <a href="../maayan-pulumi/">Pulumi explainer</a>.</p>
+  <p class="hetip">💡 טיפ: העבירו את העכבר (או הקישו באצבע) מעל מילים מסומנות בקו מקווקו צהוב לראות הסבר בעברית.</p>
+</header>
+
+<!-- ─────────── ARCHITECTURE ─────────── -->
+<section>
+  <h2>How the pieces fit together</h2>
+  <p>One <span class="he" title="זהות — חשבון שירות שבשמו רץ הקוד ומקבל הרשאות">identity</span> (a service account) ties it together: Cloud Run runs the container image from Artifact Registry, and — acting as that service account — talks to the MySQL database and the file bucket.</p>
+  <div class="diagram">
+    <pre class="mermaid">
+flowchart TB
+  Dev["deploy-cloudrun.sh"] -->|"podman push"| AR
+  subgraph GCP["Google Cloud · project freeat-staging"]
+    AR["Artifact Registry<br/><small>freeat-stg-repo</small>"]
+    Run["Cloud Run<br/><small>freeat-stg-service</small>"]
+    SQL[("Cloud SQL · MySQL 8<br/><small>freeat-stg-db-instance</small>")]
+    GCS[("Cloud Storage<br/><small>freeat-stg-bucket</small>")]
+    SA["Service Account<br/><small>freeat-stg-backend-sa</small>"]
+  end
+  AR -->|"image backend:latest"| Run
+  Run -->|"runs as"| SA
+  Run -->|"unix socket /cloudsql"| SQL
+  Run -->|"gcs disk · user files"| GCS
+  SA -.->|"cloudsql.client"| SQL
+  SA -.->|"storage.admin"| GCS
+</pre>
+  </div>
+  <p class="cap-note">Solid arrows are data paths; dashed arrows are the IAM permissions that make them allowed.</p>
+</section>
+
+<!-- ─────────── 1. CLOUD RUN ─────────── -->
+<section>
+  <div class="svchead"><span class="dot d-run"></span><h2>Cloud Run</h2><span class="tag">gcp.cloudrunv2.Service</span></div>
+  <div class="svc">
+    <div>
+      <p><b>What it is.</b> A <span class="he" title="ללא-שרת — אתה מריץ קוד בלי לנהל מכונות; הענן מקצה ומכבה אותן לפי הצורך">serverless</span> way to run a <span class="he" title="מכולה — חבילה שאורזת קוד עם כל התלויות שלו כדי שירוץ זהה בכל מקום">container</span>: give it an image, it runs it behind an HTTPS URL and <span class="he" title="הרחבה אוטומטית — הגדלה והקטנה של מספר המופעים לפי העומס">autoscales</span> for you.</p>
+      <p><b>In freeat.</b> This is the Laravel API itself — the service <code>freeat-stg-service-80a9b28</code>. It's kept public (<code>ingress: ALL</code>), holds at least one warm instance (<code>minInstanceCount: 1</code>), gets 8 CPU / 32&nbsp;Gi, and mounts the database over a unix socket. Every env var comes from <code>Pulumi.stg.yaml</code>.</p>
+      <div class="code"><span class="k-kw">new</span> gcp.cloudrunv2.<span class="k-typ">Service</span>(<span class="k-str">`${prefix}-service`</span>, {
+  <span class="k-com">// public, always-warm, runs as the backend SA</span>
+  invokerIamDisabled: <span class="k-num">true</span>,
+  scaling: { minInstanceCount: <span class="k-num">1</span> },
+  template: { serviceAccount: backendSa.email, <span class="k-com">/* … */</span> },
+});</div>
+    </div>
+    <figure class="shot">
+      <img src="img/run.png" alt="Cloud Run console showing freeat-stg-service" loading="lazy" />
+      <figcaption>console.cloud.google.com/run — freeat-stg-service</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ─────────── 2. ARTIFACT REGISTRY ─────────── -->
+<section>
+  <div class="svchead"><span class="dot d-ar"></span><h2>Artifact Registry</h2><span class="tag">gcp.artifactregistry.Repository</span></div>
+  <div class="svc">
+    <div>
+      <p><b>What it is.</b> A private <span class="he" title="מאגר — מקום מרוכז לאחסון תמונות מכולה או חבילות">registry</span> for Docker <span class="he" title="תמונת מכולה — קובץ שאורז את האפליקציה כדי להריץ אותה כמכולה">images</span>, hosted inside your GCP project.</p>
+      <p><b>In freeat.</b> The repository <code>freeat-stg-repo</code> holds one image, <code>backend</code>. <code>deploy-cloudrun.sh</code> builds it with podman and pushes <code>backend:latest</code> here; Cloud Run then pulls that exact image. Keeping the image next to Cloud Run (same region) makes pulls fast and free.</p>
+      <div class="code">registry = <span class="k-kw">new</span> gcp.artifactregistry.<span class="k-typ">Repository</span>(<span class="k-str">`${prefix}-repo`</span>, {
+  location: region,          <span class="k-com">// us-central1</span>
+  format: <span class="k-str">"DOCKER"</span>,
+});</div>
+    </div>
+    <figure class="shot">
+      <img src="img/artifacts.png" alt="Artifact Registry console showing freeat-stg-repo and the backend image" loading="lazy" />
+      <figcaption>console.cloud.google.com/artifacts — freeat-stg-repo</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ─────────── 3. CLOUD STORAGE ─────────── -->
+<section>
+  <div class="svchead"><span class="dot d-gcs"></span><h2>Cloud Storage</h2><span class="tag">gcp.storage.Bucket</span></div>
+  <div class="svc">
+    <div>
+      <p><b>What it is.</b> Object storage — a <span class="he" title="דלי — מכל אחסון בענן שמחזיק קבצים (״אובייקטים״) בכל גודל">bucket</span> that holds files (images, uploads) at any scale, each reachable by its own URL.</p>
+      <p><b>In freeat.</b> The bucket <code>freeat-stg-bucket-0cbd60b</code> is Laravel's <code>gcs</code> disk — where user files live (via Spatie Media Library). The backend writes and reads objects; to hand out temporary download links it signs them itself (see the Service Account below). <span class="he" title="גישה אחידה ברמת הדלי — ההרשאות נקבעות על כל הדלי במקום על כל קובץ בנפרד">Uniform bucket-level access</span> keeps permissions simple.</p>
+      <div class="code">bucket = <span class="k-kw">new</span> gcp.storage.<span class="k-typ">Bucket</span>(<span class="k-str">`${prefix}-bucket`</span>, {
+  location: <span class="k-str">"US"</span>,
+  uniformBucketLevelAccess: <span class="k-num">true</span>,
+});</div>
+    </div>
+    <figure class="shot">
+      <img src="img/storage.png" alt="Cloud Storage console showing the freeat buckets" loading="lazy" />
+      <figcaption>console.cloud.google.com/storage — buckets</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ─────────── 4. CLOUD SQL ─────────── -->
+<section>
+  <div class="svchead"><span class="dot d-sql"></span><h2>Cloud SQL (MySQL)</h2><span class="tag">gcp.sql.DatabaseInstance</span></div>
+  <div class="svc">
+    <div>
+      <p><b>What it is.</b> A <span class="he" title="מנוהל — הענן מטפל בגיבויים, עדכונים ותיקונים של בסיס הנתונים במקומך">managed</span> MySQL database — Google runs the engine, backups and patching; you just get a database.</p>
+      <p><b>In freeat.</b> The <span class="he" title="מופע — שרת בסיס-הנתונים עצמו, שעליו יושבים בסיסי נתונים ומשתמשים">instance</span> <code>freeat-stg-db-instance-3b042c4</code> runs MySQL 8.0 and holds the <code>laravel</code> database with user <code>laravel_user</code>. Cloud Run reaches it through a <span class="he" title="שקע יוניקס — נתיב קובץ מיוחד שדרכו שני תהליכים מדברים, כאן דרך פרוקסי מאובטח של Cloud SQL">unix socket</span> mounted at <code>/cloudsql</code>, so no password ever crosses the open network. The password itself is a Pulumi <span class="he" title="סוד — ערך רגיש שנשמר מוצפן">secret</span>, generated at random.</p>
+      <div class="code">instance = <span class="k-kw">new</span> gcp.sql.<span class="k-typ">DatabaseInstance</span>(<span class="k-str">`${prefix}-db-instance`</span>, {
+  databaseVersion: <span class="k-str">"MYSQL_8_0"</span>,
+  region: region,
+});
+<span class="k-kw">new</span> gcp.sql.<span class="k-typ">Database</span>(<span class="k-str">`${prefix}-db`</span>, { name: <span class="k-str">"laravel"</span>, <span class="k-com">/* … */</span> });</div>
+    </div>
+    <figure class="shot">
+      <img src="img/sql.png" alt="Cloud SQL console showing the freeat MySQL instance" loading="lazy" />
+      <figcaption>console.cloud.google.com/sql — freeat-stg-db-instance</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ─────────── 5. SERVICE ACCOUNT + IAM ─────────── -->
+<section>
+  <div class="svchead"><span class="dot d-sa"></span><h2>Service Account &amp; IAM</h2><span class="tag">gcp.serviceaccount.Account</span></div>
+  <div class="svc">
+    <div>
+      <p><b>What it is.</b> A <span class="he" title="חשבון שירות — זהות שאינה אדם, ששירותים משתמשים בה כדי לפעול ולקבל הרשאות">service account</span> is a non-human <span class="he" title="זהות — מי מבצע את הפעולה, כדי שאפשר להעניק לו הרשאות">identity</span>. <span class="he" title="ניהול זהויות והרשאות — המערכת שקובעת מי רשאי לעשות מה">IAM</span> then grants it <span class="he" title="תפקידים — אוספים של הרשאות שמעניקים לזהות">roles</span> — collections of permissions.</p>
+      <p><b>In freeat.</b> Cloud Run runs as <code>freeat-stg-backend-sa</code>. It's given exactly the access the app needs, nothing more:</p>
+      <p style="margin:0 0 10px">
+        <span class="pill">roles/cloudsql.client</span>
+        <span class="pill">roles/cloudsql.instanceUser</span>
+        <span class="pill">roles/storage.admin</span>
+        <span class="pill">roles/iam.serviceAccountTokenCreator</span>
+      </p>
+      <p>The last one lets the account <span class="he" title="התחזות עצמית — לבקש טוקן בשם עצמו, כדי לחתום על קישורים בלי קובץ מפתח">sign blobs as itself</span> — that's how it makes temporary signed URLs for files without shipping a key file. A JSON <span class="he" title="פרטי-הזדהות — מפתח שמאמת מי אתה מול שירות">credentials</span> key is also generated, but only for <em>local</em> development.</p>
+    </div>
+    <figure class="shot">
+      <img src="img/sa.png" alt="Service accounts console showing freeat-stg-backend-sa" loading="lazy" />
+      <figcaption>console.cloud.google.com/iam-admin/serviceaccounts</figcaption>
+    </figure>
+  </div>
+</section>
+
+<footer>
+  Every resource here is defined in <code>~/freeat/pulumi/index.ts</code> and lives in the <code>freeat-staging</code> project — screenshots are the live <code>stg</code> stack. Least-privilege throughout: the backend gets only the four roles above. See also the <a href="../maayan-pulumi/">Pulumi &amp; Cloud Run explainer</a>.
+</footer>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({
+    startOnLoad:true, securityLevel:"loose", theme:"base",
+    themeVariables:{
+      background:"#010409", primaryColor:"#161b22", primaryTextColor:"#e6edf3",
+      primaryBorderColor:"#30363d", lineColor:"#58a6ff", secondaryColor:"#21262d",
+      tertiaryColor:"#161b22", fontFamily:"system-ui, sans-serif", fontSize:"13px",
+      clusterBkg:"#0d1117", clusterBorder:"#30363d"
+    }
+  });
+</script>
+
+<script>
+// ── hover/tap-for-Hebrew glossary ────────────────────────────────────
+const GLOSS={
+  "service account":"חשבון שירות — זהות שאינה אדם, ששירותים משתמשים בה כדי לפעול ולקבל הרשאות",
+  serverless:"ללא-שרת — מריצים קוד בלי לנהל מכונות; הענן מקצה ומכבה אותן לפי הצורך",
+  managed:"מנוהל — הענן מפעיל ומתחזק את התשתית (גיבויים, עדכונים) במקומך",
+  container:"מכולה — חבילה שאורזת קוד עם כל התלויות שלו כדי שירוץ זהה בכל מקום",
+  registry:"מאגר — מקום מרוכז לאחסון תמונות מכולה או חבילות",
+  image:"תמונת מכולה — קובץ שאורז את האפליקציה כדי להריץ אותה כמכולה",
+  images:"תמונות מכולה — קבצים שאורזים אפליקציה כדי להריצה כמכולה",
+  bucket:"דלי — מכל אחסון בענן שמחזיק קבצים (״אובייקטים״) בכל גודל",
+  instance:"מופע — שרת בסיס-הנתונים עצמו, שעליו יושבים בסיסי נתונים ומשתמשים",
+  identity:"זהות — מי מבצע את הפעולה, כדי שאפשר להעניק לו הרשאות",
+  role:"תפקיד — אוסף הרשאות שמעניקים לזהות",
+  roles:"תפקידים — אוספים של הרשאות שמעניקים לזהות",
+  autoscales:"מתרחב אוטומטית — מגדיל ומקטין את מספר המופעים לפי העומס",
+  autoscaling:"הרחבה אוטומטית — הגדלה והקטנה של מספר המופעים לפי העומס",
+  region:"אזור — המיקום הגאוגרפי של מרכז הנתונים שבו רץ המשאב",
+  console:"ממשק ניהול — האתר הגרפי של הענן שבו רואים ומנהלים משאבים",
+  revision:"גרסה — עותק פרוס אחד של השירות; אפשר לחזור אליו לאחור",
+  endpoint:"נקודת קצה — כתובת שאליה שולחים בקשות כדי להגיע לשירות",
+  credentials:"פרטי-הזדהות — מפתח או טוקן שמאמת מי אתה מול שירות",
+  impersonation:"התחזות — לבקש הרשאה לפעול בשם זהות אחרת",
+  ingress:"תעבורה נכנסת — מי מורשה לשלוח בקשות אל השירות",
+  secret:"סוד — ערך רגיש (סיסמה, מפתח) שנשמר מוצפן",
+  provision:"להקצות — ליצור ולהקים משאבי ענן בפועל",
+  provisions:"מקצה — יוצר ומקים משאבי ענן בפועל",
+  socket:"שקע — נתיב שדרכו שני תהליכים מדברים ביניהם",
+  stateless:"חסר-מצב — אינו זוכר בקשות קודמות בין הרצה להרצה"
+};
+const _keys=Object.keys(GLOSS).sort((a,b)=>b.length-a.length).map(k=>k.replace(/[-\/]/g,'\\$&'));
+const GLOSS_RE=new RegExp('\\b('+_keys.join('|')+')\\b','gi');
+const _SKIP=new Set(['PRE','SCRIPT','STYLE','CODE','FIGCAPTION']);
+function annotate(root){
+  if(!root) return;
+  const tw=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode(n){
+    if(!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+    for(let p=n.parentElement;p&&p!==root.parentElement;p=p.parentElement)
+      if(_SKIP.has(p.tagName)||(p.classList&&(p.classList.contains('he')||p.classList.contains('code')||p.classList.contains('mermaid')||p.classList.contains('diagram')))) return NodeFilter.FILTER_REJECT;
+    return new RegExp(GLOSS_RE.source,'i').test(n.nodeValue)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT;
+  }});
+  const todo=[]; for(let n;n=tw.nextNode();) todo.push(n);
+  todo.forEach(node=>{
+    const s=node.nodeValue, frag=document.createDocumentFragment(); let last=0,m; GLOSS_RE.lastIndex=0;
+    while(m=GLOSS_RE.exec(s)){
+      if(m.index>last) frag.appendChild(document.createTextNode(s.slice(last,m.index)));
+      const sp=document.createElement('span'); sp.className='he';
+      const he=GLOSS[m[0].toLowerCase()]; sp.title=he; sp.dataset.he=he; sp.textContent=m[0];
+      frag.appendChild(sp); last=m.index+m[0].length;
+    }
+    if(last<s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+    node.parentNode.replaceChild(frag,node);
+  });
+}
+[...document.querySelectorAll('header p, section > p, .svc p, .cap-note, footer')].forEach(annotate);
+
+// ── custom Hebrew tooltip — hover AND tap ────────────────────────────
+const hepop=document.createElement('div'); hepop.className='hepop'; document.body.appendChild(hepop);
+let heCur=null;
+function showHe(el){
+  if(heCur) heCur.classList.remove('he-on');
+  heCur=el; el.classList.add('he-on');
+  hepop.textContent=el.dataset.he||el.title;
+  hepop.classList.add('on');
+  const r=el.getBoundingClientRect(), ph=hepop.offsetHeight;
+  const cx=Math.max(155,Math.min(r.left+r.width/2,window.innerWidth-155));
+  hepop.style.left=cx+'px';
+  if(r.top>ph+14){
+    hepop.classList.remove('below');
+    hepop.style.top=(r.top-8)+'px'; hepop.style.transform='translate(-50%,-100%)';
+  }else{
+    hepop.classList.add('below');
+    hepop.style.top=(r.bottom+8)+'px'; hepop.style.transform='translate(-50%,0)';
+  }
+}
+function hideHe(){ hepop.classList.remove('on'); if(heCur){heCur.classList.remove('he-on');heCur=null;} }
+document.addEventListener('mouseover',e=>{const el=e.target.closest('.he'); if(el) showHe(el);});
+document.addEventListener('mouseout', e=>{if(e.target.closest('.he')) hideHe();});
+document.addEventListener('click',    e=>{const el=e.target.closest('.he'); if(el){e.stopPropagation(); showHe(el);} else hideHe();});
+window.addEventListener('scroll',hideHe,true);
+</script>
+</body>
+</html>
