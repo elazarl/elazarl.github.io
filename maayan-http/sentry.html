@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sentry — how error monitoring actually works</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pur:#bc8cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}
+  header{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 4px;font-size:22px}
+  header p{margin:0 0 6px;color:var(--dim);max-width:90ch}
+  header code{font-family:var(--mono);color:var(--pur);font-size:13px}
+  .wrap{display:grid;grid-template-columns:1.35fr 1fr;gap:0;min-height:calc(100vh - 120px)}
+  .left{padding:24px 28px;border-right:1px solid var(--line)}
+  .right{padding:24px 28px;display:flex;flex-direction:column;gap:14px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 12px}
+
+  /* ── event card: clickable tokens ── */
+  .event-card{background:#010409;border:1px solid var(--line);border-radius:10px;padding:14px;
+    font-family:var(--mono);font-size:13px;line-height:2;white-space:pre-wrap;word-break:break-word}
+  .event-card .cm{color:var(--dim)}
+  .tok{border-radius:5px;padding:1px 4px;margin:-1px 0;cursor:pointer;transition:.12s;
+       border:1px solid transparent}
+  .tok:hover{filter:brightness(1.4)}
+  .tok.active{border-color:currentColor;background:rgba(88,166,255,.12)}
+
+  /* token colours */
+  .t-title{color:#ff7b72}
+  .t-level{color:var(--bad)}
+  .t-platform{color:var(--pur)}
+  .t-release{color:var(--ok)}
+  .t-env{color:var(--warn)}
+  .t-user{color:#a5d6ff}
+  .t-trace{color:var(--acc)}
+  .t-breadcrumb{color:#79c0ff}
+  .t-tag{color:var(--ok)}
+  .t-fingerprint{color:var(--pur)}
+  .t-assignee{color:var(--acc)}
+
+  .blank{color:var(--dim);font-style:italic}
+
+  .info{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc);
+        border-radius:8px;padding:14px 16px;font-size:13.5px;color:var(--dim);margin-top:14px}
+  .info h3{margin:0 0 6px;color:var(--ink);font-size:15px}
+  .info code{font-family:var(--mono);color:var(--pur);font-size:12.5px}
+  .info .hl{color:var(--ink)}
+  .info .cap{margin-top:10px;font-size:11.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+
+  /* ── feature list on the right ── */
+  .feat-grid{display:flex;flex-direction:column;gap:10px}
+  .feat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;
+        cursor:pointer;transition:.15s;border-left:3px solid transparent}
+  .feat:hover{border-left-color:var(--acc);background:#1c2128}
+  .feat.active{border-left-color:var(--acc);background:#1c2128}
+  .feat-name{font-size:13.5px;font-weight:600;color:var(--ink);margin:0 0 3px}
+  .feat-tag{font-family:var(--mono);font-size:11px;color:var(--dim);background:#010409;
+            border:1px solid var(--line);padding:1px 6px;border-radius:4px;margin-right:6px}
+  .feat-desc{font-size:13px;color:var(--dim)}
+
+  /* ── pipeline diagram ── */
+  .pipeline{display:flex;align-items:center;gap:0;margin:18px 0 6px;flex-wrap:wrap;row-gap:6px}
+  .pstep{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 12px;
+         font-size:12px;font-weight:600;cursor:pointer;transition:.12s;white-space:nowrap}
+  .pstep:hover{border-color:var(--acc);color:var(--acc)}
+  .pstep.active{border-color:var(--acc);color:var(--acc);background:rgba(88,166,255,.08)}
+  .parr{color:var(--line);margin:0 4px;font-size:16px;user-select:none}
+
+  details{margin-top:16px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+  details>summary{cursor:pointer;padding:12px 14px;font-weight:600;font-size:14px;list-style:none}
+  details>summary::-webkit-details-marker{display:none}
+  details>summary::before{content:"▸ ";color:var(--acc)}
+  details[open]>summary::before{content:"▾ "}
+  details .body{padding:0 14px 14px;color:var(--dim);font-size:13.5px}
+  details .body code{font-family:var(--mono);color:var(--pur);font-size:12.5px}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+  td.h{font-family:var(--mono);color:var(--warn);white-space:nowrap}
+  td.d{color:var(--dim)}
+  .grp{color:var(--acc);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.06em;padding-top:14px}
+
+  .pill{display:inline-block;font-family:var(--mono);font-size:12px;padding:2px 7px;border-radius:6px;
+        margin:2px 4px 2px 0;border:1px solid var(--line)}
+  .pill b{color:var(--ink)}
+  .p-error{color:var(--bad)} .p-perf{color:var(--acc)} .p-replay{color:var(--pur)}
+  .p-alert{color:var(--warn)} .p-release{color:var(--ok)}
+
+  footer{padding:14px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+  a{color:var(--acc)}
+
+  /* hover/tap-for-Hebrew glossary words */
+  .he{border-bottom:1px dotted var(--warn);cursor:help}
+  .he:hover,.he.he-on{color:var(--warn);background:rgba(210,153,34,.15)}
+  .hepop{position:fixed;z-index:60;display:none;direction:rtl;background:var(--warn);color:#1a1400;
+    font:600 13px/1.45 system-ui,sans-serif;padding:7px 11px;border-radius:8px;max-width:280px;
+    pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.45)}
+  .hepop::after{content:"";position:absolute;left:50%;transform:translateX(-50%);border:6px solid transparent}
+  .hepop:not(.below)::after{top:100%;border-top-color:var(--warn)}
+  .hepop.below::after{bottom:100%;border-bottom-color:var(--warn)}
+  .hepop.on{display:block}
+  .hetip{margin:0;direction:rtl;text-align:right;color:var(--warn);font-size:13px}
+  .hetip .he{color:var(--warn)}
+
+  /* sdk section */
+  .pysec{padding:24px 28px;border-top:1px solid var(--line)}
+  .pygrid{display:grid;grid-template-columns:1.35fr 1fr;gap:18px;align-items:start}
+  .pycode{padding:10px 4px}
+  .pyline{display:block;padding:1px 10px;border-left:2px solid transparent;cursor:pointer;
+          white-space:pre-wrap;word-break:break-word;transition:.1s}
+  .pyline:hover{background:rgba(88,166,255,.08);border-left-color:var(--line)}
+  .pyline.active{background:rgba(88,166,255,.14);border-left-color:var(--acc)}
+  .pyline.empty{cursor:default;min-height:10px}
+  .pyline.empty:hover{background:none;border-left-color:transparent}
+  .py-kw{color:#ff7b72} .py-fn{color:#d2a8ff} .py-str{color:#a5d6ff} .py-com{color:var(--dim)} .py-num{color:#79c0ff}
+  #pyinfo{position:sticky;top:14px}
+
+  @media (max-width:760px){
+    body{font-size:14px}
+    header{padding:16px}
+    h1{font-size:18px}
+    .wrap{grid-template-columns:1fr;min-height:0}
+    .left{border-right:0;border-bottom:1px solid var(--line);padding:16px}
+    .right{padding:16px}
+    .event-card{font-size:11.5px;padding:11px;line-height:2}
+    table{font-size:12px}
+    th,td{padding:7px 6px}
+    .pysec{padding:16px}
+    .pygrid{grid-template-columns:1fr}
+    #pyinfo{position:static}
+    footer{padding:12px 16px}
+    .pipeline{gap:0}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Sentry — how error monitoring actually works</h1>
+  <p>Every time your code throws an <span class="he" title="שגיאה — מצב חריג שקוד לא טיפל בו, כמו NullPointerException או TypeError">exception</span>, Sentry captures it: the full <span class="he" title="מחסנית קריאות — רשימת הפונקציות שנקראו זו מזו עד לנקודת השגיאה">stack trace</span>, the <span class="he" title="הקשר — המידע שנאסף לפני השגיאה: מה המשתמש עשה, איזו גרסה רצה, מה היה ה-URL">context</span>, the <span class="he" title="שביל פירורי לחם — יומן מסודר של פעולות אחרונות לפני השגיאה">breadcrumbs</span>, and routes it through a <span class="he" title="צינור עיבוד — שלבים עוקבים שכל אירוע עובר מרגע הלכידה עד הצגתו">pipeline</span> to the right team. Click any colored field in the event below to understand what it means.</p>
+  <p class="hetip">💡 טיפ: העבירו את העכבר (או הקישו באצבע) מעל <span class="he" title="hover — ריחוף עם העכבר / מגע באצבע במובייל">מילים מקצועיות</span> המסומנות בקו מקווקו צהוב, כדי לראות הסבר מלא בעברית.</p>
+</header>
+
+<div class="wrap">
+  <div class="left">
+    <h2>Anatomy of a Sentry event · click any colored field</h2>
+
+    <!-- Pipeline diagram -->
+    <div class="pipeline">
+      <div class="pstep" data-p="capture">📥 Capture</div><span class="parr">→</span>
+      <div class="pstep" data-p="enrich">🏷️ Enrich</div><span class="parr">→</span>
+      <div class="pstep" data-p="group">🔗 Group</div><span class="parr">→</span>
+      <div class="pstep" data-p="route">📣 Route</div><span class="parr">→</span>
+      <div class="pstep" data-p="resolve">✅ Resolve</div>
+    </div>
+    <div class="info" id="pipeline-info">
+      <h3>Click a pipeline step</h3>
+      Each event travels through five stages before you see it in the dashboard. Click a stage above to understand what happens there.
+    </div>
+
+    <!-- Event card -->
+    <div class="event-card" id="event" style="margin-top:18px">
+<span class="tok t-title" data-k="title">TypeError: Cannot read properties of undefined (reading 'id')</span>   <span class="cm">← issue title</span>
+<span class="tok t-level"  data-k="level">level: error</span>                       <span class="cm">← severity</span>
+<span class="tok t-platform" data-k="platform">platform: javascript</span>               <span class="cm">← SDK language</span>
+<span class="tok t-release" data-k="release">release: frontend@2.14.0</span>           <span class="cm">← deploy version</span>
+<span class="tok t-env"   data-k="env">environment: production</span>             <span class="cm">← which env</span>
+<span class="blank">─────────────────────────────────────────</span>
+<span class="tok t-user"  data-k="user">user: { id: "u_8821", email: "maayan@example.com" }</span>   <span class="cm">← who</span>
+<span class="tok t-trace" data-k="trace">transaction: /api/orders/{id}  traceId: a3f…</span>         <span class="cm">← where</span>
+<span class="blank">─────────────────────────────────────────</span>
+<span class="tok t-breadcrumb" data-k="breadcrumbs">breadcrumbs:  [click button#checkout] [XHR GET /cart] [console.log "cart ok"]</span>
+<span class="tok t-tag"  data-k="tags">tags:  browser=Chrome/124  os=macOS  url=/checkout</span>
+<span class="blank">─────────────────────────────────────────</span>
+<span class="tok t-fingerprint" data-k="fingerprint">fingerprint: ["TypeError", "/checkout.js", "line 88"]</span>    <span class="cm">← grouping key</span>
+<span class="tok t-assignee"   data-k="assignee">assignee: #frontend-team  (via ownership rule: /checkout*)</span></div>
+
+    <div class="info" id="info">
+      <h3>Click any colored field above</h3>
+      Each field in a Sentry event has a precise purpose. Together they answer: <span class="hl">what broke</span>, <span class="hl">who was affected</span>, <span class="hl">what led up to it</span>, and <span class="hl">who should fix it</span>.
+    </div>
+
+    <details>
+      <summary>Issue types — not just exceptions</summary>
+      <div class="body">
+        <p>Sentry captures more than crashes:</p>
+        <span class="pill p-error"><b>Error</b> — unhandled exception or explicit capture</span>
+        <span class="pill p-perf"><b>Performance</b> — slow transaction (N+1 queries, slow DB)</span>
+        <span class="pill p-replay"><b>Session Replay</b> — video of what the user did before the crash</span>
+        <span class="pill p-alert"><b>Cron Monitor</b> — missed or failed scheduled job</span>
+        <span class="pill p-release"><b>Release Health</b> — crash-free session rate per deploy</span>
+        <p style="margin-top:10px">All types share the same <span class="he" title="ממשק — המקום שבו שני מערכות נפגשות; כאן: ה-SDK ושרת Sentry">interface</span>: an SDK call → an event JSON → the pipeline.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>How grouping (deduplication) works</summary>
+      <div class="body">
+        <p>Without grouping, one bug crashing 10 000 times would flood your inbox. Sentry's <span class="he" title="כלי לאיחוד — מנגנון שמקבץ אירועים דומים לנושא אחד במקום להציגם בנפרד">deduplication</span> engine hashes the <span class="he" title="טביעת אצבע — ערך ייחודי שמזהה אירועים כשייכים לאותה שגיאה">fingerprint</span> of every event and merges events with the same fingerprint into a single <b>Issue</b>. The counter on the issue shows how many times it fired. You can override the fingerprint in code: <code>scope.set_fingerprint(["my-custom-group"])</code>.</p>
+        <p>The default fingerprint is derived from: exception type + culprit file/line. Minified JavaScript? Sentry un-minifies it first using <span class="he" title="מפת מקורות — קובץ שממפה קוד מכווץ חזרה לשמות המשתנים והקבצים המקוריים">source maps</span>.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Alerts — getting paged at the right time</summary>
+      <div class="body">
+        <p>Sentry has two alert types:</p>
+        <p><b>Issue Alerts</b> — trigger on conditions: "new issue", "regression", "issue seen &gt; 100×/hour in production". Actions: Slack, PagerDuty, email, webhook.</p>
+        <p><b>Metric Alerts</b> — trigger on numeric thresholds: error rate &gt; 5%, p95 latency &gt; 2 s, crash-free sessions &lt; 99.5%. They use a <span class="he" title="חלון הזזה — טווח זמן שמתעדכן ברציפות, למשל 'הדקות 60 האחרונות'">sliding window</span> and a warning + critical level so you get a heads-up before the pager goes off.</p>
+      </div>
+    </details>
+  </div>
+
+  <div class="right">
+    <h2>Core features — what Sentry gives you</h2>
+    <div class="feat-grid" id="features">
+
+      <div class="feat" data-f="sdk">
+        <div class="feat-name"><span class="feat-tag">SDK</span>Error Capture</div>
+        <div class="feat-desc">One <code>init()</code> call wires up global error handlers. Unhandled exceptions, promise rejections, and explicit <code>captureException()</code> calls are all sent automatically.</div>
+      </div>
+
+      <div class="feat" data-f="context">
+        <div class="feat-name"><span class="feat-tag">Context</span>User &amp; Request Context</div>
+        <div class="feat-desc">Attach user ID, email, IP, request URL, and custom tags to every event — so you can filter "show me all errors seen by user X" in one click.</div>
+      </div>
+
+      <div class="feat" data-f="perf">
+        <div class="feat-name"><span class="feat-tag">Performance</span>Distributed Tracing</div>
+        <div class="feat-desc">Every request becomes a trace: a tree of spans across services, DB queries, HTTP calls. Sentry finds the slowest spans, surfaces N+1 queries, and links traces to errors.</div>
+      </div>
+
+      <div class="feat" data-f="releases">
+        <div class="feat-name"><span class="feat-tag">Releases</span>Release Health</div>
+        <div class="feat-desc">Tag each deploy with a version string. Sentry tracks crash-free session rate per release, so you know within minutes if a new deploy is regressing users.</div>
+      </div>
+
+      <div class="feat" data-f="replay">
+        <div class="feat-name"><span class="feat-tag">Replays</span>Session Replay</div>
+        <div class="feat-desc">A pixel-perfect DOM recording of what the user did before the crash — no PII leakage (inputs are masked). Watch the replay, then jump straight to the error.</div>
+      </div>
+
+      <div class="feat" data-f="ownership">
+        <div class="feat-name"><span class="feat-tag">Workflow</span>Code Owners &amp; Routing</div>
+        <div class="feat-desc">Ownership rules (<code>path:src/checkout/* → #frontend</code>) auto-assign issues to the right team. Integrates with GitHub/GitLab so the last committer of the crashing file is notified first.</div>
+      </div>
+
+      <div class="feat" data-f="ai">
+        <div class="feat-name"><span class="feat-tag">AI</span>Sentry Autofix</div>
+        <div class="feat-desc">AI reads the stack trace, browses your codebase, and opens a draft PR with a fix. You review and merge. No context-switching: the root cause analysis happens inside Sentry.</div>
+      </div>
+
+    </div>
+
+    <div class="info" id="feat-info" style="margin-top:6px">
+      <h3>Click a feature above</h3>
+      Each feature answers a different question about your production system. Together they close the loop from "error fired" to "fix shipped".
+    </div>
+  </div>
+</div>
+
+<!-- SDK code walkthrough -->
+<section class="pysec">
+  <h2>Add Sentry to a Python app · click any line</h2>
+  <div class="pygrid">
+    <div class="event-card pycode" id="pycode"><span class="pyline" data-k="imp"><span class="py-kw">import</span> sentry_sdk</span><span class="pyline empty"> </span><span class="pyline" data-k="init">sentry_sdk.<span class="py-fn">init</span>(</span><span class="pyline" data-k="dsn">    dsn=<span class="py-str">"https://&lt;key&gt;@o0.ingest.sentry.io/&lt;project&gt;"</span>,</span><span class="pyline" data-k="traces">    traces_sample_rate=<span class="py-num">0.2</span>,       <span class="py-com"># capture 20 % of transactions</span></span><span class="pyline" data-k="profiles">    profiles_sample_rate=<span class="py-num">0.1</span>,      <span class="py-com"># CPU profiling on 10 %</span></span><span class="pyline" data-k="release">    release=<span class="py-str">"my-app@1.4.2"</span>,</span><span class="pyline" data-k="env">    environment=<span class="py-str">"production"</span>,</span><span class="pyline" data-k="initclose">)</span><span class="pyline empty"> </span><span class="pyline" data-k="user">sentry_sdk.<span class="py-fn">set_user</span>({<span class="py-str">"id"</span>: user.id, <span class="py-str">"email"</span>: user.email})</span><span class="pyline empty"> </span><span class="pyline" data-k="capture"><span class="py-kw">try</span>:</span><span class="pyline" data-k="risky">    result = risky_operation()</span><span class="pyline" data-k="except"><span class="py-kw">except</span> Exception <span class="py-kw">as</span> e:</span><span class="pyline" data-k="manual">    sentry_sdk.<span class="py-fn">capture_exception</span>(e)      <span class="py-com"># explicit capture</span></span><span class="pyline empty"> </span><span class="pyline" data-k="breadcrumb">sentry_sdk.<span class="py-fn">add_breadcrumb</span>(</span><span class="pyline" data-k="brmsg">    message=<span class="py-str">"cart fetched"</span>, category=<span class="py-str">"info"</span></span><span class="pyline" data-k="brclose">)</span></div>
+    <div class="info" id="pyinfo">
+      <h3>Click any line of code</h3>
+      This is the minimal setup for Python. One <code>init()</code> patches the global exception handler and the <code>threading</code> / <code>asyncio</code> integrations automatically. Click any line to see what it configures and why.
+    </div>
+  </div>
+</section>
+
+<footer>Sentry is <span class="he" title="קוד פתוח — תוכנה שהקוד המקור שלה חשוף וחופשי לעיון ולשימוש">open-source</span> and <span class="he" title="שירות מנוהל — ספק מארח את התשתית עבורך; אתה רק שולח אירועים">self-hostable</span>. The SDK sends events to <code>ingest.sentry.io</code> (or your own host) asynchronously in a background thread so it never blocks your app. All PII in replays and user context is masked or scrubbed before storage. The event pipeline described here is the same for all SDKs: JS, Python, Go, Ruby, iOS, Android.</footer>
+
+<script>
+// ── Event field info ─────────────────────────────────────────────────────────
+const INFO={
+  title:{h:"Issue title — the exception class + message",
+    b:"The single line that identifies the bug: <span class='hl'>type + message</span>. Sentry builds this from the exception class (<code>TypeError</code>) and the message your runtime produced. This is what you see in the issue list and in Slack alerts — make it descriptive.",
+    cap:"top-level — the 'what broke'"},
+  level:{h:"Severity level",
+    b:"One of <code>debug · info · warning · error · fatal</code>. <code>error</code> is an unhandled exception. <code>fatal</code> means the process crashed or the session ended abruptly. Levels drive alert thresholds — you might only page on <code>fatal</code> at night.",
+    cap:"severity classification"},
+  platform:{h:"Platform / SDK language",
+    b:"Which Sentry <span class='hl'>SDK</span> sent this event: <code>javascript</code>, <code>python</code>, <code>go</code>, etc. Sentry uses this to apply the right <span class='hl'>stack trace parser</span>, source-map lookup, and integration defaults — a Python traceback looks very different from a minified JS one.",
+    cap:"tells Sentry how to parse the stack trace"},
+  release:{h:"Release — the deployed version",
+    b:"A string you set at SDK init time, usually <code>app@semver</code> or a git SHA. Sentry uses it to compute <span class='hl'>regression detection</span>: an issue that was resolved in v2.13 but reappears in v2.14 is flagged as a regression automatically.",
+    cap:"enables release health + regression tracking"},
+  env:{h:"Environment — production, staging, dev…",
+    b:"Separate alert rules and dashboards per environment. You can mute staging noise while staying paged for production. The same code ships to both; only the environment tag differs.",
+    cap:"filters events to the right context"},
+  user:{h:"User context",
+    b:"Who was logged in when the crash happened. Sentry counts <span class='hl'>unique users affected</span> per issue — a crash that hit 1 user is lower priority than one that hit 4 000. You can look up 'all errors for user X' instantly. PII is configurable: scrub emails if needed.",
+    cap:"affected user — drives impact scoring"},
+  trace:{h:"Transaction + Trace ID",
+    b:"The HTTP route or job name the error happened inside (<span class='hl'>transaction</span>), plus a <span class='hl'>trace ID</span> that ties together all spans across services for that one request. Click 'Trace' in the issue and you see the full distributed waterfall: frontend → API → DB.",
+    cap:"links error to performance trace"},
+  breadcrumbs:{h:"Breadcrumbs — the trail of events before the crash",
+    b:"An automatic log of the last ~100 events: DOM clicks, XHR requests, console messages, navigation changes. They answer <span class='hl'>\"what was the user doing?\"</span> without needing to reproduce the bug. Captured automatically by browser / framework integrations.",
+    cap:"the 'what led up to it'"},
+  tags:{h:"Tags — filterable key=value pairs",
+    b:"Indexed key=value strings you attach to events. Unlike context (which is a JSON blob), tags are <span class='hl'>filterable and searchable</span> in the issue list: <code>browser:Chrome/124</code>, <code>os:macOS</code>, <code>url:/checkout</code>. Use tags for anything you'll want to group or filter by.",
+    cap:"searchable metadata"},
+  fingerprint:{h:"Fingerprint — the grouping key",
+    b:"A list of strings that Sentry hashes to decide if two events are the <span class='hl'>same issue</span>. Default: <code>[exception type, culprit file/line]</code> after de-minification. You can override it in code to merge unrelated errors or split a single exception into separate issues by business logic.",
+    cap:"controls deduplication / grouping"},
+  assignee:{h:"Assignee — who owns this issue",
+    b:"Set by <span class='hl'>Ownership Rules</span>: glob patterns map file paths or URLs to teams/users (<code>/checkout* → #frontend-team</code>). Sentry reads your GitHub CODEOWNERS file too. The right team gets the alert; they don't wade through issues meant for someone else.",
+    cap:"auto-routing to the right team"},
+};
+
+const info=document.getElementById('info');
+const toks=[...document.querySelectorAll('#event .tok')];
+function render(d){
+  info.innerHTML='<h3>'+d.h+'</h3>'+d.b+(d.cap?'<div class="cap">'+d.cap+'</div>':'');
+  annotate(info);
+}
+toks.forEach(n=>n.addEventListener('click',()=>{
+  toks.forEach(x=>x.classList.remove('active'));n.classList.add('active');
+  render(INFO[n.dataset.k]);
+}));
+
+// ── Pipeline steps ────────────────────────────────────────────────────────────
+const PIPELINE={
+  capture:{h:"📥 Capture — the SDK hooks into your runtime",
+    b:"The SDK installs <span class='hl'>global handlers</span>: <code>window.onerror</code>, <code>unhandledRejection</code>, Python's <code>sys.excepthook</code>, Django's middleware, etc. Any unhandled exception automatically calls <code>captureException()</code>. The event is buffered in memory and sent to Sentry's ingestion endpoint asynchronously — <span class='hl'>never blocking your app</span>."},
+  enrich:{h:"🏷️ Enrich — context is added automatically",
+    b:"Before sending, the SDK attaches: current user (if you called <code>set_user()</code>), breadcrumbs accumulated since the last event, tags you've set, the current request URL/headers, device info, and the release string. Server-side SDKs also attach server name, runtime version, and installed packages."},
+  group:{h:"🔗 Group — deduplication into Issues",
+    b:"Sentry ingests the raw event JSON, runs the <span class='hl'>fingerprinting algorithm</span> (or your custom fingerprint), and either creates a new Issue or increments an existing one's counter. For JS events, source maps are applied first so the fingerprint is based on the original source file, not the minified bundle."},
+  route:{h:"📣 Route — alerts and notifications",
+    b:"Issue and metric alert rules are evaluated. If a condition matches (new issue, regression, error rate spike), Sentry fires the configured action: Slack message, PagerDuty incident, GitHub issue, email, or webhook. <span class='hl'>Ownership rules</span> decide which team's alert channel receives it."},
+  resolve:{h:"✅ Resolve — closing the loop",
+    b:"Mark an issue as <b>resolved</b> (manually, via commit message <code>Fixes SENTRY-1234</code>, or automatically when a new release goes out). If the same fingerprint appears again in a later release, Sentry marks it a <span class='hl'>regression</span> and re-opens it — so nothing silently comes back."},
+};
+const psteps=[...document.querySelectorAll('.pstep')];
+const pinfo=document.getElementById('pipeline-info');
+psteps.forEach(n=>n.addEventListener('click',()=>{
+  psteps.forEach(x=>x.classList.remove('active'));n.classList.add('active');
+  const d=PIPELINE[n.dataset.p];
+  pinfo.innerHTML='<h3>'+d.h+'</h3>'+d.b;
+  annotate(pinfo);
+}));
+
+// ── Feature cards ─────────────────────────────────────────────────────────────
+const FEAT={
+  sdk:{h:"SDK — one init() call, universal coverage",
+    b:"The SDK patches the runtime globally: every uncaught exception, unhandled promise, and console.error is captured. You can also call <code>captureException(e)</code> manually. SDKs exist for 100+ platforms and frameworks. Performance is &lt;1 ms per event."},
+  context:{h:"User & Request Context — know who was hit",
+    b:"Call <code>sentry_sdk.set_user({id, email})</code> once at login. Sentry then shows: how many unique users were affected, lets you filter 'all errors for user X', and computes a user-impact score that prioritises your issue list. Request context (URL, method, headers) is captured automatically by framework integrations."},
+  perf:{h:"Distributed Tracing — find slow code anywhere",
+    b:"The SDK wraps HTTP requests, DB queries, and cache calls in <span class='hl'>spans</span>. A span has a start time, duration, and description. Spans nest into a <span class='hl'>trace</span> that crosses service boundaries via a propagated header (<code>sentry-trace</code>). The Performance tab shows the slowest transactions and the exact queries causing them."},
+  releases:{h:"Release Health — know if a deploy is good",
+    b:"Every session (app open → app close) is tagged with the release version and reported as crash-free or not. The Releases page shows crash-free session rate per version over time. If v2.14 drops below your threshold (e.g. 99%), Sentry alerts before your users do."},
+  replay:{h:"Session Replay — watch what happened",
+    b:"The JS SDK records DOM mutations (not screenshots — just DOM diffs) and sends them as compressed JSON. On replay, Sentry reconstructs a pixel-perfect video. Inputs, passwords, and credit card fields are masked by default. Replays are linked to errors: open an issue → click Replay → watch exactly what led to the crash."},
+  ownership:{h:"Code Owners & Routing — right team, every time",
+    b:"Define rules like <code>path:src/payments/** → #payments-team</code> or import CODEOWNERS from GitHub. Sentry evaluates rules against the culprit file of each issue and auto-assigns. Integrates with GitHub/GitLab: open a linked issue, create a PR, or auto-resolve an issue when a fix commit is merged."},
+  ai:{h:"Sentry Autofix — AI-generated root cause & PR",
+    b:"Click 'Autofix' on any issue. Sentry's AI reads the stack trace, fetches the relevant source files from your connected repo, traces the data flow, and writes an explanation + a draft code fix. A PR is opened in your repo. You review → merge. No context-switching; no copy-pasting stack traces into ChatGPT."},
+};
+const feats=[...document.querySelectorAll('.feat')];
+const finfo=document.getElementById('feat-info');
+feats.forEach(n=>n.addEventListener('click',()=>{
+  feats.forEach(x=>x.classList.remove('active'));n.classList.add('active');
+  const d=FEAT[n.dataset.f];
+  finfo.innerHTML='<h3>'+d.h+'</h3>'+d.b;
+  annotate(finfo);
+}));
+
+// ── Python SDK walkthrough ────────────────────────────────────────────────────
+const PYINFO={
+  imp:{h:"import sentry_sdk",b:"The official Sentry Python SDK, installable with <code>pip install sentry-sdk</code>. It ships with auto-integrations for Django, Flask, FastAPI, SQLAlchemy, Celery, and dozens more — each auto-detected at <code>init()</code> time.",cap:"the only dependency you need"},
+  init:{h:"sentry_sdk.init(…)",b:"The one call that activates everything: installs the global <code>sys.excepthook</code>, patches all detected framework integrations, and starts the background transport thread. Call it as early as possible in your app's startup, before any other imports that might throw.",cap:"call once at startup"},
+  dsn:{h:"DSN — Data Source Name",b:"A URL that tells the SDK where to send events: which Sentry organisation, which project, and which auth key. It's project-specific and safe to commit (it's not a secret — ingestion is one-way). Format: <code>https://&lt;publicKey&gt;@&lt;host&gt;/&lt;projectId&gt;</code>.",cap:"routing + auth for your project"},
+  traces:{h:"traces_sample_rate — performance sampling",b:"<code>1.0</code> = capture 100 % of transactions (expensive in high-traffic apps). <code>0.2</code> = capture 20 % — enough to get latency distributions and find slow paths without overwhelming your quota. You can also use a <code>traces_sampler</code> function to sample critical routes at 100 % and cheap ones at 1 %.",cap:"controls performance overhead"},
+  profiles:{h:"profiles_sample_rate — CPU profiling",b:"Captures a <span class='hl'>flame graph</span> of Python function call times for the sampled transactions. Tells you not just 'this transaction was slow' but 'this specific function burned 80 % of the CPU'. Sentry's profiling uses a low-overhead sampling profiler (not instrumentation).",cap:"pinpoints CPU hot spots"},
+  release:{h:"release — your version string",b:"Any string: <code>\"1.4.2\"</code>, <code>\"my-app@sha:abc123\"</code>. The Sentry CLI or GitHub Action can auto-set this to the current git commit. Used for regression detection and crash-free session rate per deploy.",cap:"ties events to a specific deploy"},
+  env:{h:"environment — which tier",b:"<code>\"production\"</code>, <code>\"staging\"</code>, <code>\"dev\"</code> — whatever string you choose. Issue alert rules can be scoped to a specific environment: alert in production, ignore in staging. The same project key works across environments; only this string changes.",cap:"filters alerts and dashboards"},
+  initclose:{h:"closing the init() call",b:"After <code>init()</code> returns, the SDK is live. All exceptions thrown anywhere in the process — even in threads or async tasks — are captured automatically. No further setup needed for basic error tracking.",cap:"SDK is now active"},
+  user:{h:"sentry_sdk.set_user(…)",b:"Call this after login. The dict is attached to every subsequent event in this thread/request context: errors, transactions, breadcrumbs. Fields: <code>id</code>, <code>email</code>, <code>username</code>, <code>ip_address</code>. You can add arbitrary keys too. Set to <code>None</code> on logout.",cap:"attach user to all subsequent events"},
+  capture:{h:"try: — wrapping risky code",b:"For code where you want to handle the exception but also report it to Sentry — e.g. a payment processor call where you'll show the user an error message but still want to know it happened.",cap:"manual capture pattern"},
+  risky:{h:"risky_operation() — your business logic",b:"Any code that might raise. If it's in a framework (Django view, Celery task), Sentry's integration will catch the exception even without a try/except. The explicit <code>capture_exception</code> is for cases where you catch and handle — but still want the event recorded.",cap:"the code you're guarding"},
+  except:{h:"except Exception as e:",b:"Broad catch — usually you'd catch a more specific exception. The key point: you handle the error (show a user message, return a fallback) <em>and</em> report it so it appears in Sentry for the engineering team.",cap:"handle + report pattern"},
+  manual:{h:"sentry_sdk.capture_exception(e)",b:"Explicitly sends the exception to Sentry including the full stack trace, current scope (user, tags, breadcrumbs), and the active transaction. Equivalent to an unhandled exception but you stay in control of the user experience.",cap:"sends the event right now"},
+  breadcrumb:{h:"sentry_sdk.add_breadcrumb(…)",b:"Manually add a breadcrumb to the current scope. Framework integrations (Django, SQLAlchemy) add breadcrumbs automatically for HTTP requests and DB queries. Your own breadcrumbs appear alongside them in the breadcrumb trail on the issue page.",cap:"record a step in the audit trail"},
+  brmsg:{h:"message, category — breadcrumb fields",b:"<code>message</code>: human-readable description. <code>category</code>: a dot-namespaced tag like <code>\"http\"</code>, <code>\"db\"</code>, <code>\"info\"</code>. Optional: <code>level</code>, <code>data</code> (arbitrary dict), <code>timestamp</code>. The UI groups breadcrumbs by category with icons.",cap:"what and what kind"},
+  brclose:{h:") — end of add_breadcrumb",b:"Breadcrumbs are stored in memory (up to 100 by default, configurable) and flushed with the next event. They have zero network cost until an error actually fires.",cap:"zero cost until an error fires"},
+};
+const pyinfo=document.getElementById('pyinfo');
+const pylines=[...document.querySelectorAll('#pycode .pyline[data-k]')];
+function renderPy(d){
+  pyinfo.innerHTML='<h3>'+d.h+'</h3>'+d.b+(d.cap?'<div class="cap">'+d.cap+'</div>':'');
+  annotate(pyinfo);
+}
+pylines.forEach(n=>n.addEventListener('click',()=>{
+  pylines.forEach(x=>x.classList.remove('active'));n.classList.add('active');
+  renderPy(PYINFO[n.dataset.k]);
+}));
+
+// ── Hebrew glossary ───────────────────────────────────────────────────────────
+const GLOSS={
+  exception:"שגיאה — מצב חריג שקוד לא טיפל בו, כמו NullPointerException",
+  exceptions:"שגיאות — מצבים חריגים שהקוד לא טיפל בהם",
+  error:"שגיאה — אירוע חריג שהוקלט על ידי Sentry",
+  errors:"שגיאות — אירועים חריגים שהוקלטו על ידי Sentry",
+  crash:"קריסה — הפסקת פעולה של האפליקציה עקב שגיאה",
+  crashes:"קריסות — הפסקות פעולה של האפליקציה עקב שגיאות",
+  "stack trace":"מחסנית קריאות — רשימת הפונקציות שנקראו עד לנקודת השגיאה",
+  breadcrumb:"פירור לחם — צעד אחד ביומן הפעולות שהוביל לשגיאה",
+  breadcrumbs:"פירורי לחם — יומן הפעולות שהוביל לשגיאה",
+  fingerprint:"טביעת אצבע — ערך שמזהה אירועים כשייכים לאותה שגיאה",
+  pipeline:"צינור עיבוד — שלבים עוקבים שאירוע עובר מלכידה עד הצגה",
+  release:"גרסה — גבולות הפריסה שמאפשרים למדוד בריאות לפי deploy",
+  releases:"גרסאות — פריסות עם תיוג לצורך מעקב אחר בריאות",
+  transaction:"טרנזקציה — בקשת HTTP אחת או משימה אחת שנמדדת מקצה לקצה",
+  trace:"עקבה — כל הspan-ים של בקשה אחת בכל השירותים",
+  span:"span — יחידת מדידה אחת (שאילתת DB, קריאת API) בתוך עקבה",
+  spans:"span-ים — יחידות מדידה בתוך עקבה",
+  session:"סשן — פרק זמן שמשתמש השתמש באפליקציה (פתיחה עד סגירה)",
+  sessions:"סשן-ים — תקופות שימוש של משתמשים באפליקציה",
+  alert:"התראה — הודעה שנשלחת כשמתקיים תנאי מוגדר",
+  alerts:"התראות — הודעות שנשלחות כשמתקיימים תנאים מוגדרים",
+  regression:"רגרסיה — שגיאה שנסגרה ושחזרה בגרסה חדשה",
+  deduplication:"ביטול כפילויות — מיזוג אירועים זהים לנושא אחד",
+  SDK:"SDK — ספרייה שמשלבים בקוד כדי לשלוח אירועים ל-Sentry",
+  "source map":"מפת מקורות — קובץ שממפה קוד מכווץ חזרה לקוד המקורי",
+  "source maps":"מפות מקורות — קבצים שממפים קוד מכווץ לקוד המקורי",
+  replay:"הקלטה — וידאו מחדש של פעולות המשתמש לפני השגיאה",
+};
+const _keys=Object.keys(GLOSS).sort((a,b)=>b.length-a.length).map(k=>k.replace(/[-]/g,'\\$&'));
+const GLOSS_RE=new RegExp('\\b('+_keys.join('|')+')\\b','gi');
+const _SKIP=new Set(['PRE','SCRIPT','STYLE','BUTTON','TD','TH']);
+function annotate(root){
+  if(!root) return;
+  const tw=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode(n){
+    if(!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+    for(let p=n.parentElement;p&&p!==root.parentElement;p=p.parentElement)
+      if(_SKIP.has(p.tagName)||(p.classList&&(p.classList.contains('he')||p.classList.contains('event-card')))) return NodeFilter.FILTER_REJECT;
+    return new RegExp(GLOSS_RE.source,'i').test(n.nodeValue)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT;
+  }});
+  const todo=[]; for(let n;n=tw.nextNode();) todo.push(n);
+  todo.forEach(node=>{
+    const s=node.nodeValue, frag=document.createDocumentFragment(); let last=0,m; GLOSS_RE.lastIndex=0;
+    while(m=GLOSS_RE.exec(s)){
+      if(m.index>last) frag.appendChild(document.createTextNode(s.slice(last,m.index)));
+      const sp=document.createElement('span'); sp.className='he';
+      const he=GLOSS[m[0].toLowerCase()]||GLOSS[m[0]]; if(!he){last=m.index+m[0].length;continue;}
+      sp.title=he; sp.dataset.he=he; sp.textContent=m[0];
+      frag.appendChild(sp); last=m.index+m[0].length;
+    }
+    if(last<s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+    node.parentNode.replaceChild(frag,node);
+  });
+}
+// annotate static prose
+[document.querySelector('header p'), document.querySelector('footer'),
+ ...document.querySelectorAll('details .body')].forEach(annotate);
+
+// ── Hebrew tooltip ────────────────────────────────────────────────────────────
+const hepop=document.createElement('div'); hepop.className='hepop'; document.body.appendChild(hepop);
+let heCur=null;
+function showHe(el){
+  if(heCur) heCur.classList.remove('he-on');
+  heCur=el; el.classList.add('he-on');
+  hepop.textContent=el.dataset.he||el.title;
+  hepop.classList.add('on');
+  const r=el.getBoundingClientRect(), ph=hepop.offsetHeight;
+  const cx=Math.max(145,Math.min(r.left+r.width/2,window.innerWidth-145));
+  hepop.style.left=cx+'px';
+  if(r.top>ph+14){
+    hepop.classList.remove('below');
+    hepop.style.top=(r.top-8)+'px'; hepop.style.transform='translate(-50%,-100%)';
+  }else{
+    hepop.classList.add('below');
+    hepop.style.top=(r.bottom+8)+'px'; hepop.style.transform='translate(-50%,0)';
+  }
+}
+function hideHe(){ hepop.classList.remove('on'); if(heCur){heCur.classList.remove('he-on');heCur=null;} }
+document.addEventListener('mouseover',e=>{const el=e.target.closest('.he'); if(el) showHe(el);});
+document.addEventListener('mouseout', e=>{if(e.target.closest('.he')) hideHe();});
+document.addEventListener('click',    e=>{const el=e.target.closest('.he'); if(el){e.stopPropagation(); showHe(el);} else hideHe();});
+window.addEventListener('scroll',hideHe,true);
+</script>
+</body>
+</html>
