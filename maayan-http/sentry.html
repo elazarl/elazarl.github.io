@@ -52,6 +52,11 @@
   .info .hl{color:var(--ink)}
   .info .cap{margin-top:10px;font-size:11.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
 
+  /* real-product screenshots embedded in explanations */
+  .shot{margin:12px 0 2px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#010409}
+  .shot img{display:block;width:100%;height:auto}
+  .shot figcaption{font-size:11px;color:var(--dim);padding:5px 9px;border-top:1px solid var(--line);font-family:var(--mono)}
+
   /* ── feature list on the right ── */
   .feat-grid{display:flex;flex-direction:column;gap:10px}
   .feat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;
@@ -186,6 +191,11 @@
       Each field in a Sentry event has a precise purpose. Together they answer: <span class="hl">what broke</span>, <span class="hl">who was affected</span>, <span class="hl">what led up to it</span>, and <span class="hl">who should fix it</span>.
     </div>
 
+    <figure class="shot" style="margin-top:16px">
+      <img src="img/issue-detail.png" alt="A real Sentry issue detail page showing the breakdown of an event" loading="lazy" />
+      <figcaption>docs.sentry.io — the same fields on a real issue detail page</figcaption>
+    </figure>
+
     <details>
       <summary>Issue types — not just exceptions</summary>
       <div class="body">
@@ -280,6 +290,9 @@
 <footer>Sentry is <span class="he" title="קוד פתוח — תוכנה שהקוד המקור שלה חשוף וחופשי לעיון ולשימוש">open-source</span> and <span class="he" title="שירות מנוהל — ספק מארח את התשתית עבורך; אתה רק שולח אירועים">self-hostable</span>. The SDK sends events to <code>ingest.sentry.io</code> (or your own host) asynchronously in a background thread so it never blocks your app. All PII in replays and user context is masked or scrubbed before storage. The event pipeline described here is the same for all SDKs: JS, Python, Go, Ruby, iOS, Android.</footer>
 
 <script>
+// real Sentry product screenshots (from docs.sentry.io) appended to explanations
+const shot=(f,cap)=>`<figure class="shot"><img src="img/${f}" alt="${cap}" loading="lazy"><figcaption>${cap}</figcaption></figure>`;
+
 // ── Event field info ─────────────────────────────────────────────────────────
 const INFO={
   title:{h:"Issue title — the exception class + message",
@@ -305,16 +318,16 @@ const INFO={
     cap:"links error to performance trace"},
   breadcrumbs:{h:"Breadcrumbs — the trail of events before the crash",
     b:"An automatic log of the last ~100 events: DOM clicks, XHR requests, console messages, navigation changes. They answer <span class='hl'>\"what was the user doing?\"</span> without needing to reproduce the bug. Captured automatically by browser / framework integrations.",
-    cap:"the 'what led up to it'"},
+    cap:"the 'what led up to it'"+shot('breadcrumbs.png','docs.sentry.io — the breadcrumbs trail on a real issue')},
   tags:{h:"Tags — filterable key=value pairs",
     b:"Indexed key=value strings you attach to events. Unlike context (which is a JSON blob), tags are <span class='hl'>filterable and searchable</span> in the issue list: <code>browser:Chrome/124</code>, <code>os:macOS</code>, <code>url:/checkout</code>. Use tags for anything you'll want to group or filter by.",
-    cap:"searchable metadata"},
+    cap:"searchable metadata"+shot('tags.png','docs.sentry.io — the tags section of an issue')},
   fingerprint:{h:"Fingerprint — the grouping key",
     b:"A list of strings that Sentry hashes to decide if two events are the <span class='hl'>same issue</span>. Default: <code>[exception type, culprit file/line]</code> after de-minification. You can override it in code to merge unrelated errors or split a single exception into separate issues by business logic.",
     cap:"controls deduplication / grouping"},
   assignee:{h:"Assignee — who owns this issue",
     b:"Set by <span class='hl'>Ownership Rules</span>: glob patterns map file paths or URLs to teams/users (<code>/checkout* → #frontend-team</code>). Sentry reads your GitHub CODEOWNERS file too. The right team gets the alert; they don't wade through issues meant for someone else.",
-    cap:"auto-routing to the right team"},
+    cap:"auto-routing to the right team"+shot('ownership.png','docs.sentry.io — suspect commit links the crash to the last committer')},
 };
 
 const info=document.getElementById('info');
@@ -337,7 +350,7 @@ const PIPELINE={
   group:{h:"🔗 Group — deduplication into Issues",
     b:"Sentry ingests the raw event JSON, runs the <span class='hl'>fingerprinting algorithm</span> (or your custom fingerprint), and either creates a new Issue or increments an existing one's counter. For JS events, source maps are applied first so the fingerprint is based on the original source file, not the minified bundle."},
   route:{h:"📣 Route — alerts and notifications",
-    b:"Issue and metric alert rules are evaluated. If a condition matches (new issue, regression, error rate spike), Sentry fires the configured action: Slack message, PagerDuty incident, GitHub issue, email, or webhook. <span class='hl'>Ownership rules</span> decide which team's alert channel receives it."},
+    b:"Issue and metric alert rules are evaluated. If a condition matches (new issue, regression, error rate spike), Sentry fires the configured action: Slack message, PagerDuty incident, GitHub issue, email, or webhook. <span class='hl'>Ownership rules</span> decide which team's alert channel receives it."+shot('alert.png','docs.sentry.io — an alert details / trigger view')},
   resolve:{h:"✅ Resolve — closing the loop",
     b:"Mark an issue as <b>resolved</b> (manually, via commit message <code>Fixes SENTRY-1234</code>, or automatically when a new release goes out). If the same fingerprint appears again in a later release, Sentry marks it a <span class='hl'>regression</span> and re-opens it — so nothing silently comes back."},
 };
@@ -357,15 +370,15 @@ const FEAT={
   context:{h:"User & Request Context — know who was hit",
     b:"Call <code>sentry_sdk.set_user({id, email})</code> once at login. Sentry then shows: how many unique users were affected, lets you filter 'all errors for user X', and computes a user-impact score that prioritises your issue list. Request context (URL, method, headers) is captured automatically by framework integrations."},
   perf:{h:"Distributed Tracing — find slow code anywhere",
-    b:"The SDK wraps HTTP requests, DB queries, and cache calls in <span class='hl'>spans</span>. A span has a start time, duration, and description. Spans nest into a <span class='hl'>trace</span> that crosses service boundaries via a propagated header (<code>sentry-trace</code>). The Performance tab shows the slowest transactions and the exact queries causing them."},
+    b:"The SDK wraps HTTP requests, DB queries, and cache calls in <span class='hl'>spans</span>. A span has a start time, duration, and description. Spans nest into a <span class='hl'>trace</span> that crosses service boundaries via a propagated header (<code>sentry-trace</code>). The Performance tab shows the slowest transactions and the exact queries causing them."+shot('trace.png','docs.sentry.io — the trace waterfall: spans across services')},
   releases:{h:"Release Health — know if a deploy is good",
-    b:"Every session (app open → app close) is tagged with the release version and reported as crash-free or not. The Releases page shows crash-free session rate per version over time. If v2.14 drops below your threshold (e.g. 99%), Sentry alerts before your users do."},
+    b:"Every session (app open → app close) is tagged with the release version and reported as crash-free or not. The Releases page shows crash-free session rate per version over time. If v2.14 drops below your threshold (e.g. 99%), Sentry alerts before your users do."+shot('release-health.png','docs.sentry.io — crash-free sessions per release')},
   replay:{h:"Session Replay — watch what happened",
-    b:"The JS SDK records DOM mutations (not screenshots — just DOM diffs) and sends them as compressed JSON. On replay, Sentry reconstructs a pixel-perfect video. Inputs, passwords, and credit card fields are masked by default. Replays are linked to errors: open an issue → click Replay → watch exactly what led to the crash."},
+    b:"The JS SDK records DOM mutations (not screenshots — just DOM diffs) and sends them as compressed JSON. On replay, Sentry reconstructs a pixel-perfect video. Inputs, passwords, and credit card fields are masked by default. Replays are linked to errors: open an issue → click Replay → watch exactly what led to the crash."+shot('replay.png','docs.sentry.io — the session replay player with the event timeline')},
   ownership:{h:"Code Owners & Routing — right team, every time",
     b:"Define rules like <code>path:src/payments/** → #payments-team</code> or import CODEOWNERS from GitHub. Sentry evaluates rules against the culprit file of each issue and auto-assigns. Integrates with GitHub/GitLab: open a linked issue, create a PR, or auto-resolve an issue when a fix commit is merged."},
   ai:{h:"Sentry Autofix — AI-generated root cause & PR",
-    b:"Click 'Autofix' on any issue. Sentry's AI reads the stack trace, fetches the relevant source files from your connected repo, traces the data flow, and writes an explanation + a draft code fix. A PR is opened in your repo. You review → merge. No context-switching; no copy-pasting stack traces into ChatGPT."},
+    b:"Click 'Autofix' on any issue. Sentry's AI reads the stack trace, fetches the relevant source files from your connected repo, traces the data flow, and writes an explanation + a draft code fix. A PR is opened in your repo. You review → merge. No context-switching; no copy-pasting stack traces into ChatGPT."+shot('autofix.png','docs.sentry.io — Seer, the Sentry AI agent, analysing an issue')},
 };
 const feats=[...document.querySelectorAll('.feat')];
 const finfo=document.getElementById('feat-info');
