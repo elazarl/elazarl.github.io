@@ -287,6 +287,18 @@
   </div>
 </section>
 
+<!-- Backend (freeat) Sentry walkthrough -->
+<section class="pysec">
+  <h2>Add Sentry to the freeat backend · Node.js + Express · click any line</h2>
+  <div class="pygrid">
+    <div class="event-card pycode" id="nodecode"><span class="pyline" data-k="ncom1"><span class="py-com">// instrument.ts — loaded before any other module</span></span><span class="pyline" data-k="nimp1"><span class="py-kw">import</span> * <span class="py-kw">as</span> Sentry <span class="py-kw">from</span> <span class="py-str">"@sentry/node"</span>;</span><span class="pyline" data-k="nimp2"><span class="py-kw">import</span> { <span class="py-fn">nodeProfilingIntegration</span> } <span class="py-kw">from</span> <span class="py-str">"@sentry/profiling-node"</span>;</span><span class="pyline empty"> </span><span class="pyline" data-k="ninit">Sentry.<span class="py-fn">init</span>({</span><span class="pyline" data-k="ndsn">  dsn: process.env.SENTRY_DSN,</span><span class="pyline" data-k="nenv">  environment: process.env.PULUMI_STACK ?? <span class="py-str">"stg"</span>,   <span class="py-com">// stg | production</span></span><span class="pyline" data-k="nrelease">  release: process.env.GIT_SHA,                <span class="py-com">// set by deploy-cloudrun.sh</span></span><span class="pyline" data-k="nintegr">  integrations: [<span class="py-fn">nodeProfilingIntegration</span>()],</span><span class="pyline" data-k="ntraces">  tracesSampleRate: <span class="py-num">0.2</span>,</span><span class="pyline" data-k="nprofiles">  profilesSampleRate: <span class="py-num">0.1</span>,</span><span class="pyline" data-k="ninitclose">});</span><span class="pyline empty"> </span><span class="pyline" data-k="ncom2"><span class="py-com">// server.ts</span></span><span class="pyline" data-k="nfirst"><span class="py-kw">import</span> <span class="py-str">"./instrument"</span>;            <span class="py-com">// MUST be the first import</span></span><span class="pyline" data-k="nexpress"><span class="py-kw">import</span> express <span class="py-kw">from</span> <span class="py-str">"express"</span>;</span><span class="pyline" data-k="nsentry"><span class="py-kw">import</span> * <span class="py-kw">as</span> Sentry <span class="py-kw">from</span> <span class="py-str">"@sentry/node"</span>;</span><span class="pyline empty"> </span><span class="pyline" data-k="napp"><span class="py-kw">const</span> app = <span class="py-fn">express</span>();</span><span class="pyline" data-k="nroute">app.<span class="py-fn">get</span>(<span class="py-str">"/api/orders/:id"</span>, (req, res) => res.<span class="py-fn">json</span>(<span class="py-fn">getOrder</span>(req.params.id)));</span><span class="pyline empty"> </span><span class="pyline" data-k="nerrhandler">Sentry.<span class="py-fn">setupExpressErrorHandler</span>(app);   <span class="py-com">// after routes, before your own error mw</span></span><span class="pyline" data-k="nownmw">app.<span class="py-fn">use</span>((err, req, res, next) => res.<span class="py-fn">status</span>(<span class="py-num">500</span>).<span class="py-fn">json</span>({ error: <span class="py-str">"internal"</span> }));</span><span class="pyline empty"> </span><span class="pyline" data-k="nlisten">app.<span class="py-fn">listen</span>(process.env.PORT || <span class="py-num">8080</span>);   <span class="py-com">// Cloud Run injects PORT</span></span></div>
+    <div class="info" id="nodeinfo">
+      <h3>Click any line of code</h3>
+      This is how Sentry wires into the <span class="hl">freeat</span> Express backend that runs on Cloud Run. The key rule: <code>instrument.ts</code> must be imported <em>before</em> Express, so Sentry can patch the HTTP and DB layers as they load. Click any line to see what it does.
+    </div>
+  </div>
+</section>
+
 <footer>Sentry is <span class="he" title="קוד פתוח — תוכנה שהקוד המקור שלה חשוף וחופשי לעיון ולשימוש">open-source</span> and <span class="he" title="שירות מנוהל — ספק מארח את התשתית עבורך; אתה רק שולח אירועים">self-hostable</span>. The SDK sends events to <code>ingest.sentry.io</code> (or your own host) asynchronously in a background thread so it never blocks your app. All PII in replays and user context is masked or scrubbed before storage. The event pipeline described here is the same for all SDKs: JS, Python, Go, Ruby, iOS, Android.</footer>
 
 <script>
@@ -417,6 +429,38 @@ function renderPy(d){
 pylines.forEach(n=>n.addEventListener('click',()=>{
   pylines.forEach(x=>x.classList.remove('active'));n.classList.add('active');
   renderPy(PYINFO[n.dataset.k]);
+}));
+
+// ── freeat backend (Node.js) walkthrough ──────────────────────────────────────
+const NODEINFO={
+  ncom1:{h:"instrument.ts — the boot hook",b:"A tiny module whose only job is to call <code>Sentry.init()</code>. It lives in its own file so it can be imported <span class='hl'>first</span>, before Express or the database client. That ordering is what lets Sentry auto-instrument those libraries.",cap:"loaded before everything else"},
+  nimp1:{h:"import * as Sentry from \"@sentry/node\"",b:"The server-side SDK — <code>npm i @sentry/node</code>. Different package from the browser SDK: it hooks <code>process.on('uncaughtException')</code>, <code>unhandledRejection</code>, and wraps Node's <code>http</code>, <code>express</code>, <code>pg</code>/<code>mysql</code> modules for tracing.",cap:"the Node SDK"},
+  nimp2:{h:"nodeProfilingIntegration",b:"From <code>@sentry/profiling-node</code>. Adds a low-overhead sampling CPU profiler so slow transactions come with a flame graph of which functions burned the time. Optional — drop this line and the profilesSampleRate below if you don't need it.",cap:"optional CPU profiling"},
+  ninit:{h:"Sentry.init({ … })",b:"The single call that activates everything. Because this runs at the top of <code>instrument.ts</code> — imported before Express — every later <code>require/import</code> of a supported library gets patched automatically.",cap:"activates the SDK"},
+  ndsn:{h:"dsn: process.env.SENTRY_DSN",b:"The project's Data Source Name. Kept in an env var (set as a Cloud Run env / secret by Pulumi) rather than hard-coded. If <code>SENTRY_DSN</code> is unset the SDK stays silent — handy for local dev where you don't want to ship events.",cap:"where events are sent"},
+  nenv:{h:"environment — from the Pulumi stack",b:"freeat deploys two stacks: <code>stg</code> and <code>production</code>. Reusing the Pulumi stack name as the Sentry environment means alerts and dashboards split the same way your infra does — page on production, ignore staging noise.",cap:"stg vs production, from infra"},
+  nrelease:{h:"release: process.env.GIT_SHA",b:"<code>deploy-cloudrun.sh</code> builds the image tagged with the git commit and passes that SHA in as <code>GIT_SHA</code>. Sentry then ties every event to the exact deploy — enabling regression detection and crash-free-rate per release.",cap:"ties events to a deploy"},
+  nintegr:{h:"integrations: [nodeProfilingIntegration()]",b:"Express, HTTP, and common DB drivers are enabled by <span class='hl'>default</span> — you only list the extras here (profiling). Each integration adds spans and breadcrumbs for its library automatically.",cap:"extra instrumentation"},
+  ntraces:{h:"tracesSampleRate: 0.2",b:"Capture 20 % of requests as performance transactions. On a busy backend, 1.0 would be expensive and noisy; 0.2 is enough to see latency distributions and find slow routes / N+1 queries. Swap in a <code>tracesSampler</code> function to sample <code>/api/checkout</code> at 100 % and health checks at 0 %.",cap:"performance sampling"},
+  nprofiles:{h:"profilesSampleRate: 0.1",b:"Of the transactions that <em>are</em> traced, profile 10 % at the CPU level. Requires the profiling integration above. Gives you 'this function ate 80 % of the CPU', not just 'this route was slow'.",cap:"CPU profiling rate"},
+  ninitclose:{h:"closing init()",b:"After this returns the SDK is live for the whole process — including background jobs, timers, and async tasks. No per-request setup needed for basic error capture.",cap:"SDK now active"},
+  ncom2:{h:"server.ts — your actual app",b:"The normal Express entry point. The only Sentry-specific things here are the very first import line and the error handler near the end.",cap:"the app itself"},
+  nfirst:{h:"import \"./instrument\"  — first!",b:"This must be the <span class='hl'>first</span> import in the file. In TypeScript/ESM the safest form is Node's <code>--import ./instrument.js</code> flag, but a top-of-file import works too. Load Express before Sentry.init runs and the auto-instrumentation silently no-ops.",cap:"ordering is load-bearing"},
+  nexpress:{h:"import express",b:"Standard Express. Because <code>instrument</code> already ran, the moment this module loads Sentry wraps its router so every request becomes a traced transaction and 500s are captured — with zero changes to your route code.",cap:"auto-instrumented on import"},
+  nsentry:{h:"import * as Sentry (again)",b:"Re-imported here only to call <code>setupExpressErrorHandler</code> below. It's the same singleton initialised in <code>instrument.ts</code>; importing it twice doesn't re-init.",cap:"same singleton"},
+  napp:{h:"const app = express()",b:"Nothing special — the app is created as usual. Request tracing is already attached by the integration; you don't add middleware for it.",cap:"ordinary app creation"},
+  nroute:{h:"a normal route",b:"Your business logic, untouched. If <code>getOrder()</code> throws, Express forwards the error to the handlers below — and Sentry's error handler records it with the full stack trace, the request URL, and the active transaction attached.",cap:"unmodified business logic"},
+  nerrhandler:{h:"Sentry.setupExpressErrorHandler(app)",b:"Registers the Sentry error-capturing middleware. Placement matters: <span class='hl'>after all routes</span>, and before any error handler that would swallow the exception. It reports the error, then passes it along so your own handler still runs.",cap:"captures unhandled route errors"},
+  nownmw:{h:"your own error middleware",b:"Runs <em>after</em> Sentry has recorded the error, so the user still gets a clean JSON 500 while the engineering team gets the full event in Sentry. The two don't conflict — Sentry reports, you respond.",cap:"report and still respond nicely"},
+  nlisten:{h:"app.listen(process.env.PORT || 8080)",b:"Cloud Run injects the <code>PORT</code> env var and expects the container to listen on it. Nothing Sentry-specific — but worth noting the SDK's background transport flushes events without blocking these requests.",cap:"Cloud Run entry point"},
+};
+const nodeinfo=document.getElementById('nodeinfo');
+const nodelines=[...document.querySelectorAll('#nodecode .pyline[data-k]')];
+nodelines.forEach(n=>n.addEventListener('click',()=>{
+  nodelines.forEach(x=>x.classList.remove('active'));n.classList.add('active');
+  const d=NODEINFO[n.dataset.k];
+  nodeinfo.innerHTML='<h3>'+d.h+'</h3>'+d.b+(d.cap?'<div class="cap">'+d.cap+'</div>':'');
+  annotate(nodeinfo);
 }));
 
 // ── Hebrew glossary ───────────────────────────────────────────────────────────
