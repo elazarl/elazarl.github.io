@@ -299,6 +299,18 @@
   </div>
 </section>
 
+<!-- PHP Sentry walkthrough -->
+<section class="pysec">
+  <h2>Add Sentry to a PHP app · click any line</h2>
+  <div class="pygrid">
+    <div class="event-card pycode" id="phpcode"><span class="pyline" data-k="preq"><span class="py-kw">require</span> <span class="py-str">'vendor/autoload.php'</span>;        <span class="py-com">// Composer autoloader</span></span><span class="pyline empty"> </span><span class="pyline" data-k="pinit">\Sentry\<span class="py-fn">init</span>([</span><span class="pyline" data-k="pdsn">    <span class="py-str">'dsn'</span> => <span class="py-str">'https://&lt;key&gt;@o0.ingest.sentry.io/&lt;project&gt;'</span>,</span><span class="pyline" data-k="ptraces">    <span class="py-str">'traces_sample_rate'</span> => <span class="py-num">0.2</span>,      <span class="py-com">// capture 20 % of transactions</span></span><span class="pyline" data-k="ppii">    <span class="py-str">'send_default_pii'</span> => <span class="py-kw">true</span>,       <span class="py-com">// attach user IP + request data</span></span><span class="pyline" data-k="prelease">    <span class="py-str">'release'</span> => <span class="py-str">'my-app@1.4.2'</span>,</span><span class="pyline" data-k="penv">    <span class="py-str">'environment'</span> => <span class="py-str">'production'</span>,</span><span class="pyline" data-k="pinitclose">]);</span><span class="pyline empty"> </span><span class="pyline" data-k="puser">\Sentry\<span class="py-fn">configureScope</span>(<span class="py-kw">function</span> (\Sentry\State\Scope $scope) <span class="py-kw">use</span> ($user) {</span><span class="pyline" data-k="psetuser">    $scope-&gt;<span class="py-fn">setUser</span>([<span class="py-str">'id'</span> => $user-&gt;id, <span class="py-str">'email'</span> => $user-&gt;email]);</span><span class="pyline" data-k="puserclose">});</span><span class="pyline empty"> </span><span class="pyline" data-k="ptry"><span class="py-kw">try</span> {</span><span class="pyline" data-k="prisky">    $result = <span class="py-fn">risky_operation</span>();</span><span class="pyline" data-k="pcatch">} <span class="py-kw">catch</span> (\Throwable $e) {</span><span class="pyline" data-k="pmanual">    \Sentry\<span class="py-fn">captureException</span>($e);      <span class="py-com">// explicit capture</span></span><span class="pyline" data-k="pcatchclose">}</span><span class="pyline empty"> </span><span class="pyline" data-k="pbreadcrumb">\Sentry\<span class="py-fn">addBreadcrumb</span>(<span class="py-kw">new</span> \Sentry\<span class="py-fn">Breadcrumb</span>(</span><span class="pyline" data-k="pbrargs">    \Sentry\Breadcrumb::LEVEL_INFO, \Sentry\Breadcrumb::TYPE_DEFAULT, <span class="py-str">'cart'</span>, <span class="py-str">'cart fetched'</span></span><span class="pyline" data-k="pbrclose">));</span></div>
+    <div class="info" id="phpinfo">
+      <h3>Click any line of code</h3>
+      The PHP SDK (<code>composer require sentry/sentry</code>) works the same way as the others: one <code>init()</code> registers a global error &amp; exception handler, then you enrich the scope and capture explicitly where you want. Framework packages exist for Laravel and Symfony. Click any line to see what it does.
+    </div>
+  </div>
+</section>
+
 <footer>Sentry is <span class="he" title="קוד פתוח — תוכנה שהקוד המקור שלה חשוף וחופשי לעיון ולשימוש">open-source</span> and <span class="he" title="שירות מנוהל — ספק מארח את התשתית עבורך; אתה רק שולח אירועים">self-hostable</span>. The SDK sends events to <code>ingest.sentry.io</code> (or your own host) asynchronously in a background thread so it never blocks your app. All PII in replays and user context is masked or scrubbed before storage. The event pipeline described here is the same for all SDKs: JS, Python, Go, Ruby, iOS, Android.</footer>
 
 <script>
@@ -461,6 +473,37 @@ nodelines.forEach(n=>n.addEventListener('click',()=>{
   const d=NODEINFO[n.dataset.k];
   nodeinfo.innerHTML='<h3>'+d.h+'</h3>'+d.b+(d.cap?'<div class="cap">'+d.cap+'</div>':'');
   annotate(nodeinfo);
+}));
+
+// ── PHP walkthrough ───────────────────────────────────────────────────────────
+const PHPINFO={
+  preq:{h:"require 'vendor/autoload.php'",b:"Composer's autoloader — it makes the <code>\\Sentry\\*</code> functions available. Install with <code>composer require sentry/sentry</code>. Load it as early as possible so <code>init()</code> can hook the error handler before your code runs.",cap:"the only dependency you need"},
+  pinit:{h:"\\Sentry\\init([ … ])",b:"The one call that activates everything: registers a global <code>set_error_handler</code> / <code>set_exception_handler</code> and a shutdown handler that also catches fatal errors. Call it once during bootstrap, before the rest of your app.",cap:"call once at startup"},
+  pdsn:{h:"'dsn' => …",b:"The Data Source Name: which Sentry org, project, and public key to send to. Not a secret — safe to keep in config. If omitted (or empty), the SDK stays inert, which is convenient for local dev. Format: <code>https://&lt;publicKey&gt;@&lt;host&gt;/&lt;projectId&gt;</code>.",cap:"routing + auth for your project"},
+  ptraces:{h:"'traces_sample_rate' => 0.2",b:"Capture 20 % of requests as performance transactions. PHP is request-per-process, so 1.0 on a busy site is a lot of events; 0.2 is enough to see latency and slow DB calls. Use <code>traces_sampler</code> (a callable) to sample important routes at 100 %.",cap:"performance sampling"},
+  ppii:{h:"'send_default_pii' => true",b:"Lets the SDK attach personally-identifiable request data automatically: the client IP, request headers, cookies, and the logged-in user from the framework. Off by default for privacy — turn it on when you're comfortable storing that in Sentry.",cap:"auto-attach request + user data"},
+  prelease:{h:"'release' => 'my-app@1.4.2'",b:"A version string — a semver or git SHA, usually set from an env var by your deploy script. Powers regression detection and crash-free rate per deploy, exactly like the other SDKs.",cap:"ties events to a deploy"},
+  penv:{h:"'environment' => 'production'",b:"<code>production</code>, <code>staging</code>, <code>dev</code> — any string. Alert rules and dashboards can be scoped per environment so staging noise doesn't page you. The same DSN works across all of them; only this string changes.",cap:"filters alerts and dashboards"},
+  pinitclose:{h:"closing init()",b:"After this returns the SDK is live for the whole request. Any uncaught exception or fatal error from here on is captured automatically — you only add explicit capture where you catch and handle errors yourself.",cap:"SDK is now active"},
+  puser:{h:"\\Sentry\\configureScope(function … )",b:"Runs a callback against the current <span class='hl'>scope</span> — the bag of context (user, tags, extra) attached to every event from now on. The <code>use ($user)</code> pulls your app's user object into the closure.",cap:"mutate the current scope"},
+  psetuser:{h:"$scope->setUser([...])",b:"Attaches the user to all subsequent events in this request: errors, transactions, breadcrumbs. Sentry then counts unique users affected per issue and lets you filter 'all errors for user X'. Fields: <code>id</code>, <code>email</code>, <code>username</code>, <code>ip_address</code>.",cap:"attach user to every event"},
+  puserclose:{h:"}) — end configureScope",b:"The scope changes persist for the rest of the request (or until you change them). In a long-running worker you'd push/pop a scope per job so context doesn't leak between them.",cap:"scope persists for the request"},
+  ptry:{h:"try { — guarding risky code",b:"For code where you want to handle the exception yourself — show the user a friendly error, return a fallback — but still record it in Sentry. Unhandled exceptions are caught automatically; this pattern is for the ones you catch.",cap:"handle + report pattern"},
+  prisky:{h:"risky_operation()",b:"Your business logic — anything that might throw. If this ran inside a Laravel/Symfony request, the framework integration would capture a thrown exception even without this try/catch.",cap:"the code you're guarding"},
+  pcatch:{h:"catch (\\Throwable $e)",b:"<code>\\Throwable</code> is the root of both <code>Exception</code> and <code>Error</code> in PHP 7+, so this catches everything — including type errors and fatals you can recover from. Usually you'd catch something more specific.",cap:"catches errors and exceptions"},
+  pmanual:{h:"\\Sentry\\captureException($e)",b:"Explicitly sends the exception to Sentry with the full stack trace and the current scope (user, tags, breadcrumbs) attached. Returns an event ID you can show the user ('quote this ID to support'). You stay in control of the response.",cap:"sends the event right now"},
+  pcatchclose:{h:"} — end of catch",b:"After reporting, execution continues normally — the user gets your fallback while the engineering team gets the event. Reporting and handling don't conflict.",cap:"report, then carry on"},
+  pbreadcrumb:{h:"\\Sentry\\addBreadcrumb(new Breadcrumb(…))",b:"Manually records a step in the trail that ships with the <em>next</em> event. Framework integrations add breadcrumbs for SQL queries and HTTP calls automatically; this is how you add your own.",cap:"record a step in the trail"},
+  pbrargs:{h:"level, type, category, message",b:"A <code>Breadcrumb</code>'s constructor: <code>LEVEL_INFO</code> (severity), <code>TYPE_DEFAULT</code> (how the UI renders it), a dot-namespaced <code>category</code> like <code>'cart'</code>, and a human-readable message. The UI groups breadcrumbs by category with icons.",cap:"what and what kind"},
+  pbrclose:{h:")); — end of addBreadcrumb",b:"Breadcrumbs live in memory (up to 100 by default) and flush with the next captured event. Zero network cost until an error actually fires.",cap:"zero cost until an error fires"},
+};
+const phpinfo=document.getElementById('phpinfo');
+const phplines=[...document.querySelectorAll('#phpcode .pyline[data-k]')];
+phplines.forEach(n=>n.addEventListener('click',()=>{
+  phplines.forEach(x=>x.classList.remove('active'));n.classList.add('active');
+  const d=PHPINFO[n.dataset.k];
+  phpinfo.innerHTML='<h3>'+d.h+'</h3>'+d.b+(d.cap?'<div class="cap">'+d.cap+'</div>':'');
+  annotate(phpinfo);
 }));
 
 // ── Hebrew glossary ───────────────────────────────────────────────────────────
