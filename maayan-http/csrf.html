@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CSRF — how a request you never made gets sent in your name</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pur:#bc8cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 system-ui,sans-serif}
+  header{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 6px;font-size:22px}
+  header p{margin:0;color:var(--dim);max-width:80ch}
+  main{padding:24px 28px;max-width:90ch}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--acc);margin:30px 0 12px}
+  h2:first-of-type{margin-top:6px}
+  p{margin:0 0 14px}
+  .wire{background:#010409;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+        font-family:var(--mono);font-size:13px;line-height:1.8;white-space:pre-wrap;word-break:break-word;margin:0 0 8px}
+  .cm{color:var(--dim)}
+  .m{color:#ff7b72} .u{color:var(--acc)} .k{color:var(--warn)} .v{color:#a5d6ff}
+  .evil{border-left:3px solid var(--bad)} .good{border-left:3px solid var(--ok)}
+  .cap{color:var(--dim);font-size:12.5px;margin:0 0 20px}
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:2px 18px;margin:0 0 18px}
+  .box.acc{border-left:3px solid var(--acc)} .box.bad{border-left:3px solid var(--bad)}
+  .box.ok{border-left:3px solid var(--ok)}
+  code{font-family:var(--mono);color:var(--pur);font-size:12.5px}
+  b{color:var(--ink)}
+  ol,ul{margin:0 0 14px;padding-left:22px} li{margin:4px 0;color:var(--dim)} li b{color:var(--ink)}
+  footer{padding:16px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+  a{color:var(--acc)}
+  .he{border-bottom:1px dotted var(--warn);cursor:help}
+  .he:hover{color:var(--warn);background:rgba(210,153,34,.15)}
+</style>
+</head>
+<body>
+<header>
+  <h1>CSRF — a request you never made, sent in your name</h1>
+  <p><b>Cross-Site Request Forgery.</b> The browser attaches your <span class="he" title="עוגייה — פיסת מידע שהשרת ביקש מהדפדפן לשמור, והדפדפן שולח בחזרה אוטומטית בכל בקשה לאותו אתר">cookies</span> to <i>every</i> request to a site — even a request triggered by a <b>different</b>, malicious site. So an attacker's page can make your browser act as the logged-in you.</p>
+</header>
+
+<main>
+
+<h2>The one idea</h2>
+<p>Cookies are <b>automatic</b>. If you're logged into <code>bank.com</code>, your browser sends the bank's session cookie on any request to <code>bank.com</code> — no matter <span class="he" title="מי גרם לבקשה — הדפדפן מצרף את העוגייה לפי כתובת היעד, לא לפי מי שיזם את הבקשה">who caused that request</span>. The bank sees a valid cookie and assumes <i>you</i> meant it.</p>
+
+<div class="box bad">
+<p><b>Attack shape:</b> you're logged into the bank in one tab. In another tab you open <code>evil.com</code>. Its HTML quietly fires a request at the bank. Your browser attaches the bank cookie. The transfer goes through.</p>
+</div>
+
+<h2>Example 1 — an image tag that moves money</h2>
+<p>If the action is a <span class="he" title="בקשת GET — אמורה רק לקרוא מידע, לא לשנות. אם היא מבצעת פעולה — זו כבר טעות אבטחה">GET</span>, even an <code>&lt;img&gt;</code> on the attacker's page triggers it. The browser fetches the "image" and sends the cookie:</p>
+<div class="wire evil"><span class="cm">&lt;!-- sitting on evil.com --&gt;</span>
+&lt;img src=<span class="v">"https://bank.com/transfer?to=attacker&amount=5000"</span>&gt;</div>
+<p class="cap">The browser turns that into a real request <b>with your bank cookie attached</b>. No click needed.</p>
+
+<h2>Example 2 — an auto-submitting form (POST)</h2>
+<p>POST doesn't save you. A hidden form submits itself with JavaScript:</p>
+<div class="wire evil"><span class="cm">&lt;!-- evil.com --&gt;</span>
+&lt;form action=<span class="v">"https://bank.com/transfer"</span> method=<span class="v">"POST"</span>&gt;
+  &lt;input type=hidden name=<span class="v">"to"</span> value=<span class="v">"attacker"</span>&gt;
+  &lt;input type=hidden name=<span class="v">"amount"</span> value=<span class="v">"5000"</span>&gt;
+&lt;/form&gt;
+&lt;script&gt;document.forms[0].submit()&lt;/script&gt;</div>
+<p>What the bank actually receives — a normal-looking POST, cookie and all:</p>
+<div class="wire evil"><span class="m">POST</span> <span class="u">/transfer</span> HTTP/1.1
+<span class="k">Host:</span> <span class="v">bank.com</span>
+<span class="k">Cookie:</span> <span class="v">session=abc123…</span>   <span class="cm">← attached automatically</span>
+<span class="k">Origin:</span> <span class="v">https://evil.com</span>  <span class="cm">← the tell: request came from elsewhere</span>
+
+to=attacker&amount=5000</div>
+<p class="cap">The bank can't tell this from a real one — the cookie is genuine. The only clue is that <code>Origin</code> isn't the bank.</p>
+
+<h2>Why it works — the rationale</h2>
+<ul>
+<li>Cookies identify you by <b>destination</b>, not by <b>who initiated</b> the request.</li>
+<li>A page can send requests to <i>other</i> origins (images, forms) — it just can't <b>read the response</b> (<span class="he" title="מדיניות מקור-זהה — קוד מאתר אחד לא יכול לקרוא תשובות מאתר אחר, אבל כן יכול לשלוח אליו בקשות">Same-Origin Policy</span>). For a state-changing action, sending is enough.</li>
+<li>So authentication alone proves <i>you're logged in</i> — not that <i>you intended this request</i>.</li>
+</ul>
+
+<h2>The fix</h2>
+<div class="box ok">
+<p><b>1. CSRF token.</b> Server plants a secret random value in the page (a form field / header) that the attacker's site can't read or guess. Real requests carry it; forged ones don't.</p>
+</div>
+<div class="wire good"><span class="m">POST</span> <span class="u">/transfer</span> HTTP/1.1
+<span class="k">Cookie:</span> <span class="v">session=abc123…</span>
+<span class="k">X-CSRF-Token:</span> <span class="v">9f3a…</span>   <span class="cm">← evil.com can't know this → request rejected</span>
+
+to=friend&amount=50</div>
+<p class="cap">Cookie proves who you are; the token proves the request came from the bank's own page.</p>
+
+<div class="box ok">
+<p><b>2. <code>SameSite</code> cookies.</b> Tell the browser not to attach the cookie on cross-site requests. One line, kills most CSRF:</p>
+</div>
+<div class="wire good"><span class="k">Set-Cookie:</span> <span class="v">session=abc123; </span><span class="he" title="SameSite=Lax — הדפדפן לא יצרף את העוגייה לבקשות שמגיעות מאתר אחר (חוץ מניווט GET רגיל)">SameSite=Lax</span><span class="v">; Secure; HttpOnly</span></div>
+<p class="cap"><code>Lax</code> is the modern browser default. <code>Strict</code> is tighter. This is the laziest real defense.</p>
+
+<div class="box ok">
+<p><b>3. Check <code>Origin</code>.</b> Reject state-changing requests whose <code>Origin</code> header isn't your own site.</p>
+</div>
+
+<div class="box acc">
+<p><b>Rule of thumb:</b> GET must never change state. Anything that does (POST/PUT/DELETE) needs a CSRF token <i>or</i> <code>SameSite</code> cookies. Use both.</p>
+</div>
+
+</main>
+
+<footer>CSRF exploits the same thing that makes login convenient: the browser sends your <span class="he" title="עוגייה — נשלחת אוטומטית, ולכן גם כשלא התכוונת">cookie</span> automatically. The defense is proving <i>intent</i>, not just <i>identity</i>. See also <a href="index.html">HTTP/1.1</a>.</footer>
+</body>
+</html>
