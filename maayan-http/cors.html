@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CORS — how one site is allowed to read another</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --ink:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pur:#bc8cff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 system-ui,sans-serif}
+  header{padding:24px 28px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 6px;font-size:22px}
+  header p{margin:0;color:var(--dim);max-width:80ch}
+  main{padding:24px 28px;max-width:90ch}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--acc);margin:30px 0 12px}
+  h2:first-of-type{margin-top:6px}
+  p{margin:0 0 14px}
+  .wire{background:#010409;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+        font-family:var(--mono);font-size:13px;line-height:1.8;white-space:pre-wrap;word-break:break-word;margin:0 0 8px}
+  .cm{color:var(--dim)}
+  .m{color:#ff7b72} .u{color:var(--acc)} .k{color:var(--warn)} .v{color:#a5d6ff}
+  .evil{border-left:3px solid var(--bad)} .good{border-left:3px solid var(--ok)}
+  .neutral{border-left:3px solid var(--acc)}
+  .cap{color:var(--dim);font-size:12.5px;margin:0 0 20px}
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:2px 18px;margin:0 0 18px}
+  .box.acc{border-left:3px solid var(--acc)} .box.bad{border-left:3px solid var(--bad)}
+  .box.ok{border-left:3px solid var(--ok)} .box.warn{border-left:3px solid var(--warn)}
+  code{font-family:var(--mono);color:var(--pur);font-size:12.5px}
+  b{color:var(--ink)}
+  ol,ul{margin:0 0 14px;padding-left:22px} li{margin:4px 0;color:var(--dim)} li b{color:var(--ink)}
+  table{border-collapse:collapse;width:100%;margin:0 0 18px;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel);color:var(--acc);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+  td{color:var(--dim)} td b{color:var(--ink)}
+  footer{padding:16px 28px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+  a{color:var(--acc)}
+  .he{border-bottom:1px dotted var(--warn);cursor:help}
+  .he:hover{color:var(--warn);background:rgba(210,153,34,.15)}
+</style>
+</head>
+<body>
+<header>
+  <h1>CORS — how one site is allowed to read another</h1>
+  <p><b>Cross-Origin Resource Sharing.</b> By default the browser lets your JavaScript <i>send</i> a request anywhere but not <i>read</i> the answer from another <span class="he" title="מקור — השילוש סכימה + דומיין + פורט. שינוי של אחד מהם = מקור אחר">origin</span>. CORS is the mechanism by which the <b>server</b> says "this origin may read my response" — and the browser then, and only then, hands it over.</p>
+</header>
+
+<main>
+
+<h2>The one idea</h2>
+<p>CORS is not a lock the browser adds. It is a <b>relaxation</b> of a lock that was always there: the <span class="he" title="מדיניות מקור-זהה — קוד מאתר אחד לא יכול לקרוא תשובות מאתר אחר, אבל כן יכול לשלוח אליו בקשות">Same-Origin Policy</span>. Without CORS headers, cross-origin reads are blocked. With them, the server opts in — per origin, per method, per header.</p>
+
+<div class="box acc">
+<p><b>Who decides:</b> the server. <b>Who enforces:</b> the browser. Nothing else. <code>curl</code>, your backend, a mobile app and a Python script all ignore CORS entirely — they were never bound by the Same-Origin Policy to begin with.</p>
+</div>
+
+<h2>What counts as "another origin"</h2>
+<p>An origin is <code>scheme://host:port</code>. All three must match exactly — no <span class="he" title="ללא חוכמות — הדפדפן משווה מיתרים, לא דומיינים 'קרובים'">cleverness</span>, no "same company" logic:</p>
+<table>
+<tr><th>Compared to <code>https://app.example.com</code></th><th>Same origin?</th><th>Why</th></tr>
+<tr><td><code>https://app.example.com/other/path</code></td><td><b>Yes</b></td><td>Path is not part of the origin</td></tr>
+<tr><td><code>http://app.example.com</code></td><td><b>No</b></td><td>Different scheme</td></tr>
+<tr><td><code>https://api.example.com</code></td><td><b>No</b></td><td>Different host — a subdomain is a different origin</td></tr>
+<tr><td><code>https://app.example.com:8443</code></td><td><b>No</b></td><td>Different port</td></tr>
+</table>
+<p class="cap">This is why a frontend on <code>app.example.com</code> talking to its own API on <code>api.example.com</code> needs CORS. Same owner, same certificate, same team — still cross-origin.</p>
+
+<h2>How SOP applies: sending is allowed, reading is not</h2>
+<p>The Same-Origin Policy is often summarized as "you can't talk to other sites". That is wrong, and the difference is the whole point:</p>
+<ul>
+<li><b>Sending is old and unrestricted.</b> <code>&lt;img src&gt;</code>, <code>&lt;script src&gt;</code>, <code>&lt;link&gt;</code>, <code>&lt;form&gt;</code> and stylesheets have been reaching across origins since 1995. The web is built on it.</li>
+<li><b>Reading is what's guarded.</b> Your JS cannot see the response body, status or most headers of a cross-origin request unless the server allows it.</li>
+</ul>
+<div class="box bad">
+<p>That asymmetry is exactly the hole <a href="csrf.html">CSRF</a> lives in: the attacker doesn't need to read anything, only to <i>cause</i> a state change. CORS closes the reading half, not the sending half — so <b>CORS is not a CSRF defense</b>, and never was.</p>
+</div>
+<p>Concretely, with <code>fetch()</code> from <code>https://app.example.com</code> to <code>https://api.other.com/me</code>: the request <b>does leave your machine</b>, the server <b>does process it</b> and <b>does answer</b>. Then the browser inspects the response, finds no permission for your origin, throws away the body and rejects the promise. The "CORS error" is a <span class="he" title="שלב אחרי המעשה — הבקשה בוצעה, הדפדפן פשוט לא מוכן להראות לך את התשובה">post-hoc</span> refusal to show you what already happened.</p>
+
+<h2>The simple case — one request, one header</h2>
+<p>Browser adds <code>Origin</code> to every cross-origin request. It is not optional and JS cannot forge it:</p>
+<div class="wire neutral"><span class="m">GET</span> <span class="u">/rates</span> HTTP/1.1
+<span class="k">Host:</span> <span class="v">api.other.com</span>
+<span class="k">Origin:</span> <span class="v">https://app.example.com</span>   <span class="cm">← set by the browser, always truthful</span></div>
+<p>The server answers with the permission slip:</p>
+<div class="wire good">HTTP/1.1 <span class="v">200 OK</span>
+<span class="k">Access-Control-Allow-Origin:</span> <span class="v">https://app.example.com</span>
+<span class="k">Content-Type:</span> <span class="v">application/json</span>
+
+{"USD":3.71}</div>
+<p class="cap">Header matches the asking origin → the browser hands the JSON to your JS. Header missing or different → the response is discarded, and only a console message survives.</p>
+
+<div class="box warn">
+<p><b><code>Access-Control-Allow-Origin: *</code></b> means "any origin may read this". Correct for genuinely public data (fonts, public price feeds, CDN assets). Wrong the moment the response depends on <i>who</i> asked — see credentials below, where the browser refuses <code>*</code> outright.</p>
+</div>
+
+<h2>The preflight — asking permission before doing anything</h2>
+<p>A plain <code>&lt;form&gt;</code> could always POST cross-site, so servers have always had to cope with that. But a <code>PUT</code>, a <code>DELETE</code>, a custom header like <code>X-Api-Key</code> or a JSON content type were <b>never possible</b> from old HTML. Servers were written assuming they could not arrive cross-origin. So before sending one, the browser asks first:</p>
+<div class="wire neutral"><span class="m">OPTIONS</span> <span class="u">/orders/42</span> HTTP/1.1   <span class="cm">← the </span><span class="he" title="בקשת בדיקה מקדימה — הדפדפן שואל את השרת אם מותר, לפני שהוא שולח את הבקשה האמיתית">preflight</span><span class="cm">, sent by the browser on its own</span>
+<span class="k">Host:</span> <span class="v">api.example.com</span>
+<span class="k">Origin:</span> <span class="v">https://app.example.com</span>
+<span class="k">Access-Control-Request-Method:</span> <span class="v">DELETE</span>
+<span class="k">Access-Control-Request-Headers:</span> <span class="v">authorization, content-type</span></div>
+<div class="wire good">HTTP/1.1 <span class="v">204 No Content</span>
+<span class="k">Access-Control-Allow-Origin:</span> <span class="v">https://app.example.com</span>
+<span class="k">Access-Control-Allow-Methods:</span> <span class="v">GET, POST, DELETE</span>
+<span class="k">Access-Control-Allow-Headers:</span> <span class="v">authorization, content-type</span>
+<span class="k">Access-Control-Max-Age:</span> <span class="v">86400</span>   <span class="cm">← cache this answer 24h, skip the extra round-trip</span></div>
+<p class="cap">Only after a satisfying preflight does the real <code>DELETE</code> get sent. If the preflight fails, the actual request <b>never leaves the browser</b> — the one case where CORS truly prevents the request rather than hiding the answer.</p>
+
+<div class="box acc">
+<p><b>No preflight needed</b> ("simple request") for <code>GET</code>/<code>HEAD</code>/<code>POST</code> with only <span class="he" title="כותרות בטוחות — כותרות שגם טופס HTML רגיל היה יכול לשלוח, ולכן אין בהן חידוש מבחינת השרת">CORS-safelisted headers</span> and a <code>Content-Type</code> of <code>application/x-www-form-urlencoded</code>, <code>multipart/form-data</code> or <code>text/plain</code>. Note what's absent: <code>application/json</code>. Sending JSON is enough to trigger a preflight — that surprise is most people's first CORS bug.</p>
+</div>
+
+<h2>Credentials — where cookies come in</h2>
+<p>By default <code>fetch()</code> sends <b>no</b> cookies cross-origin and <b>ignores</b> <code>Set-Cookie</code> in the reply. To use the session you must ask explicitly:</p>
+<div class="wire neutral"><span class="cm">// on https://app.example.com</span>
+fetch(<span class="v">"https://api.example.com/me"</span>, { credentials: <span class="v">"include"</span> })
+<span class="cm">// XHR equivalent: xhr.withCredentials = true</span></div>
+<p>Now the request carries the cookie — and the server must answer with a <b>stricter</b> pair of headers:</p>
+<div class="wire good">HTTP/1.1 <span class="v">200 OK</span>
+<span class="k">Access-Control-Allow-Origin:</span> <span class="v">https://app.example.com</span>   <span class="cm">← exact origin. `*` is rejected here</span>
+<span class="k">Access-Control-Allow-Credentials:</span> <span class="v">true</span>
+<span class="k">Vary:</span> <span class="v">Origin</span>   <span class="cm">← or a cache serves origin A's permission slip to origin B</span></div>
+<p>Three rules that trip everyone:</p>
+<ul>
+<li><b><code>*</code> is banned with credentials.</b> The browser refuses the response even though the server said yes. You must echo the exact <code>Origin</code> — which means keeping an allowlist, because echoing whatever arrives is the same as trusting every site on the internet.</li>
+<li><b>The cookie must also be allowed to travel.</b> CORS and <a href="csrf.html"><code>SameSite</code></a> are independent gates. With the modern default <code>SameSite=Lax</code>, the cookie is not attached cross-site at all — no CORS header can override that. Cross-site sessions need <code>SameSite=None; Secure</code>, which re-opens the CSRF door and puts you back on tokens.</li>
+<li><b>Credentials means all ambient authority</b>, not just cookies: <code>Authorization</code> set by the browser, TLS client certs. A bearer token you attach by hand is just a header — no <code>credentials</code> flag needed, but it does force a preflight.</li>
+</ul>
+
+<div class="box bad">
+<p><b>Why the browser is this paranoid:</b> if <code>evil.com</code> could send credentialed requests <i>and</i> read the replies, the Same-Origin Policy would be gone. It would <code>fetch("https://mail.example.com/inbox", {credentials:"include"})</code> and read your mail with your own cookie. <code>Allow-Credentials: true</code> is a server explicitly saying "this named origin is part of my trust boundary."</p>
+</div>
+
+<h2>Reading response headers</h2>
+<p>Even on an allowed response, JS sees only a short safelist of headers. Anything else — pagination counts, a request id, <code>Location</code> — must be published:</p>
+<div class="wire good"><span class="k">Access-Control-Expose-Headers:</span> <span class="v">X-Total-Count, X-Request-Id</span></div>
+<p class="cap">Without this, <code>res.headers.get("X-Total-Count")</code> returns <code>null</code> while the header is plainly visible in DevTools. DevTools shows the wire; JS sees the filtered view.</p>
+
+<h2>A real example — why CORS earns its keep</h2>
+<p>You run a bike-rental service. Frontend is a static React bundle on a CDN at <code>https://app.bikes.com</code>; the API is a separate deployment at <code>https://api.bikes.com</code>; you also sell an embeddable "bikes near you" widget that partner hotels drop into their own sites.</p>
+<div class="box ok">
+<p><b>Without CORS</b> your only options are the bad old ones: proxy every API call through the CDN origin (a second hop, extra latency, defeats deploying the API independently), or serve JSON through <code>&lt;script&gt;</code> tags as <span class="he" title="JSONP — פריצה עתיקה: עוטפים JSON בקריאה לפונקציה ומגישים אותו כקובץ סקריפט. עובד, אבל מוותר על כל בקרת גישה">JSONP</span> — which is GET-only and hands the remote origin full script execution in your page.</p>
+</div>
+<p><b>With CORS</b> each consumer gets exactly the access it needs, from one API:</p>
+<table>
+<tr><th>Consumer</th><th>Server answers</th><th>Effect</th></tr>
+<tr><td><b>Your own app</b><br><code>app.bikes.com</code>, logged-in user</td><td><code>Allow-Origin: https://app.bikes.com</code><br><code>Allow-Credentials: true</code></td><td>Session cookie works; user sees their bookings. No proxy hop.</td></tr>
+<tr><td><b>Public station map</b><br>anyone</td><td><code>Allow-Origin: *</code></td><td>Any site may read station locations. Nothing user-specific is there to leak.</td></tr>
+<tr><td><b>Partner widget</b><br><code>hotel-a.com</code>, <code>hotel-b.com</code></td><td>Echo <code>Origin</code> if in allowlist<br>+ <code>Vary: Origin</code></td><td>Named partners read pricing; a scraper's origin gets nothing back through a browser.</td></tr>
+<tr><td><b>evil.com</b></td><td>no matching header</td><td>Can still fire requests (that's CSRF's problem), but cannot read a single byte of the reply.</td></tr>
+</table>
+<p class="cap">One deployment, three trust levels, expressed in response headers instead of network topology. That is the useful part: <b>the API decides who may read it, and can change its mind with a config edit.</b></p>
+
+<h2>What CORS is not</h2>
+<ul>
+<li><b>Not access control for your server.</b> A blocked read still ran your code and touched your DB. Attackers use <code>curl</code>. Authentication and authorization are still entirely your job.</li>
+<li><b>Not a CSRF defense.</b> Simple requests need no permission to be <i>sent</i>. Use <code>SameSite</code> and tokens.</li>
+<li><b>Not something the client can fix.</b> No fetch option, no header from JS, no frontend library grants you access — only the server's response can. A "CORS proxy" works by <i>being</i> a different server that adds the header.</li>
+<li><b>Not about the network.</b> <code>localhost:3000</code> → <code>localhost:8080</code> is cross-origin. Same machine, same process tree, different port.</li>
+</ul>
+
+<div class="box acc">
+<p><b>Rule of thumb:</b> public and user-agnostic data → <code>*</code>. Anything tied to a session → exact origin from an allowlist, <code>Allow-Credentials: true</code>, <code>Vary: Origin</code>, and CSRF protection on top. Never reflect an arbitrary <code>Origin</code> back with credentials enabled — that is a one-line rewrite of the Same-Origin Policy into "everyone is trusted".</p>
+</div>
+
+</main>
+
+<footer>CORS reads like a restriction and behaves like a permission: the default was always "you may knock, you may not look inside". CORS is the server holding the door open for named guests. See also <a href="csrf.html">CSRF</a> — the attack that lives in the knocking half — and <a href="index.html">HTTP/1.1</a>.</footer>
+</body>
+</html>
